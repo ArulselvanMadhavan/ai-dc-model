@@ -25,6 +25,7 @@ if __name__ == "__main__":
     env.process(wrapper())
     env.run()
 
+    print(h100.mem_rem())
     for d in data:
         evt = d[2]
         if isinstance(evt, simpy.events.Timeout) and evt.value is not None:

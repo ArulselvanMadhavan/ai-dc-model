@@ -40,7 +40,6 @@ class Xpu:
 
     def compute(self, flops, dtype, op):
         comp_time = int((flops / self.flops[dtype.value - 1]) * MICRO)
-        print(comp_time)
         yield self.env.timeout(comp_time, value=[op, "compute"])
 
     def mem_access(self, rd_bytes, dtype, op):
@@ -71,3 +70,6 @@ class Xpu:
             yield self.env.timeout(1, value=[op, "mem_fill"])
         else:
             raise Exception(Xpu.oom_msg(size_in_bytes, self.memory.capacity - self.memory.level))
+
+    def mem_rem(self):
+        return (self.memory.capacity - self.memory.level) / GIGA
