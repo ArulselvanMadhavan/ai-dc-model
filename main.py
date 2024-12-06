@@ -1,5 +1,5 @@
 import simpy
-from components.xpu import Xpu, Dtypes
+from components.xpu import Xpu, Dtypes, XpuSpecs
 from trace import trace, monitor
 from functools import partial
 
@@ -9,12 +9,20 @@ if __name__ == "__main__":
     monitor = partial(monitor, data)
     trace(env, monitor)
 
-    xpu = Xpu(env, fp32_gflops=989000)
-    # 32x512x12288 12288x12288
+    h100_specs = XpuSpecs((989000, 0.5), (3350, 0.7), (80, 0.85))
+    h100 = Xpu(env, h100_specs)
+
     B = 32
     S = 512
     E = 12288
-    env.process(xpu.matmul(B*S, E, E))
+    dtype = Dtypes.FP16
+
+    def wrapper():
+        yield env.process(h100.mem_fill(E*E, dtype, "ExE"))
+        yield env.process(h100.mem_fill(B*S*E, dtype, "BxSxE"))
+        yield env.process(h100.matmul(B*S, E, E))
+
+    env.process(wrapper())
     env.run()
 
     for d in data:
