@@ -13,22 +13,26 @@ class XpuSpecs:
     mem_cap_g: Tuple[int, float]
 
 class Xpu:
-    def __init__(self, env, specs: XpuSpecs):
+    def __init__(self, env, specs: XpuSpecs, dev_id: int):
         self.flops = [specs.fp32_gflops[0] * specs.fp32_gflops[1] * GIGA * dtype.value for dtype in Dtypes]
         self.mem_bw = specs.mem_bw_g[0] * specs.mem_bw_g[1] * GIGA
         self.mem_cap = specs.mem_cap_g[0] * specs.mem_cap_g[1] * GIGA
         self.memory = simpy.Container(env, init=0, capacity=self.mem_cap)
         self.env = env
         self.tile_size = 128
+        self.dev_id = dev_id
+
+    def evt_data(self, name):
+        return EventData(name, self.env.now, f"xpu_{self.dev_id}")
 
     def compute(self, flops, dtype, op):
         comp_time = int((flops / self.flops[dtype.value - 1]) * MICRO)
-        yield self.env.timeout(comp_time, value=EventData([op, "compute"], self.env.now))
+        yield self.env.timeout(comp_time, value=self.evt_data([op, "compute"]))
 
     def mem_access(self, bts, is_read, dtype, op):
         rd_bytes = bts * dtype.byte_size()
         mem_time = int((bts / self.mem_bw) * MICRO)
-        yield self.env.timeout(mem_time, value=EventData([op, "mem_rd" if is_read else "mem_wr"], self.env.now))
+        yield self.env.timeout(mem_time, value=self.evt_data([op, "mem_rd" if is_read else "mem_wr"]))
 
     def matmul(self, b, m, n, p, dtype, op):
         wr_size = b * m * p
@@ -55,7 +59,7 @@ class Xpu:
         size_in_bytes = size * dtype.byte_size()
         if (self.memory.level + size_in_bytes) < self.memory.capacity:
             yield self.memory.put(size_in_bytes)
-            yield self.env.timeout(1, value=EventData([op, "mem_fill"], self.env.now))
+            yield self.env.timeout(1, value=self.evt_data([op, "mem_fill"]))
         else:
             raise Exception(Xpu.oom_msg(size_in_bytes, self.memory.capacity - self.memory.level))
 

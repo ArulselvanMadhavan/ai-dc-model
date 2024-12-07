@@ -10,6 +10,7 @@ MICRO = 10**6
 class EventData:
     name: List[str]
     start_time: int
+    src: str
 
 class Dtypes(Enum):
     FP32 = 1
