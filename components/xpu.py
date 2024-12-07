@@ -1,28 +1,10 @@
 import simpy
 from enum import Enum
 from simpy.events import AllOf
+from simpy.util import start_delayed
+from typing import Tuple, List
+from utils import GIGA, MICRO, MILLI, EventData, Dtypes
 from dataclasses import dataclass
-from typing import Tuple
-
-class Dtypes(Enum):
-    FP32 = 1
-    FP16 = 2                    # FP16 = BF16 in Nvidia H100
-    FP8 = 3
-
-    def byte_size(self):
-        out = 0
-        match self:
-            case Dtypes.FP32:
-                out = 4
-            case Dtypes.FP16:
-                out = 2
-            case Dtypes.FP8:
-                out = 1
-        return out
-
-GIGA = 10**9
-MILLI = 10**3
-MICRO = 10**6
 
 @dataclass
 class XpuSpecs:
@@ -37,27 +19,33 @@ class Xpu:
         self.mem_cap = specs.mem_cap_g[0] * specs.mem_cap_g[1] * GIGA
         self.memory = simpy.Container(env, init=0, capacity=self.mem_cap)
         self.env = env
+        self.tile_size = 128
 
     def compute(self, flops, dtype, op):
         comp_time = int((flops / self.flops[dtype.value - 1]) * MICRO)
-        yield self.env.timeout(comp_time, value=[op, "compute"])
+        yield self.env.timeout(comp_time, value=EventData([op, "compute"], self.env.now))
 
-    def mem_access(self, rd_bytes, dtype, op):
-        rd_bytes = rd_bytes * dtype.byte_size()
-        mem_time = int((rd_bytes / self.mem_bw) * MICRO)
-        yield self.env.timeout(mem_time, value=[op, "mem_access"])
+    def mem_access(self, bts, is_read, dtype, op):
+        rd_bytes = bts * dtype.byte_size()
+        mem_time = int((bts / self.mem_bw) * MICRO)
+        yield self.env.timeout(mem_time, value=EventData([op, "mem_rd" if is_read else "mem_wr"], self.env.now))
 
-    def matmul(self, m, n, p, dtype=Dtypes.FP16):
-        op = "matmul"
-        flops = m * n * p
-        wr_size = m * p
-        rd_size = m * n + n * p
+    def matmul(self, b, m, n, p, dtype, op):
+        wr_size = b * m * p
 
-        yield self.env.process(self.mem_fill(wr_size, dtype, "mat_out"))
+        yield self.env.process(self.mem_fill(wr_size, dtype, op))
 
-        mem_proc = self.env.process(self.mem_access(rd_size + wr_size, dtype, op))
-        comp_proc = self.env.process(self.compute(flops, dtype, op))
-        yield AllOf(self.env, [mem_proc, comp_proc])
+        is_read = True
+        rd_size = b * m * n + b * n * p
+        mem_rd = self.env.process(self.mem_access(rd_size, is_read, dtype, op))
+
+        macs = b * m * n * p
+        comp_proc = self.env.process(self.compute(macs*2, dtype, op))
+
+        is_read = False
+        mem_wr = self.env.process(self.mem_access(wr_size, is_read, dtype, op))
+
+        yield AllOf(self.env, [mem_rd, comp_proc, mem_wr])
 
     @staticmethod
     def oom_msg(req, avail):
@@ -67,7 +55,7 @@ class Xpu:
         size_in_bytes = size * dtype.byte_size()
         if (self.memory.level + size_in_bytes) < self.memory.capacity:
             yield self.memory.put(size_in_bytes)
-            yield self.env.timeout(1, value=[op, "mem_fill"])
+            yield self.env.timeout(1, value=EventData([op, "mem_fill"], self.env.now))
         else:
             raise Exception(Xpu.oom_msg(size_in_bytes, self.memory.capacity - self.memory.level))
 
