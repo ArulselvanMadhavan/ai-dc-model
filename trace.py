@@ -91,7 +91,6 @@ def dump_perfetto(component_types, component_mat, data):
             for i, e in enumerate(evts):
                 if e.src == "xpu_1": #FIXME
                     continue
-                print(e, end_times[i])
                 if ev_groups.get(e.start_time, None) is None:
                     ev_groups[e.start_time] = [e]
                     et_groups[e.start_time] = [end_times[i]]
