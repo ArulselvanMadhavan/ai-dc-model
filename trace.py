@@ -129,6 +129,7 @@ def dump_perfetto(component_types, component_mat, data):
         evts = get_timeout_evts(data)
         for (evt_type, timestamp, evt) in evts:
             thread_uuid = uuids[0]
+            print(evt)
             evt_name = "_".join(evt.name)
             tpkt, tevt = tpkt_tevt()
             tevt.track_uuid = thread_uuid

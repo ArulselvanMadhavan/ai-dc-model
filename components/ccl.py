@@ -16,15 +16,15 @@ class Ccl:
     def all_reduce(self, payload, dtype, op):
         if self.tokens.level < self.tokens.capacity:
             yield self.tokens.put(1)
-            yield self.env.timeout(1, value=self.evt_data([op, "all_reduce_init"]))
+            yield self.env.timeout(1, value=self.evt_data(op + ["all_reduce_init"]))
             while True:
                 if self.tokens.level == self.tokens.capacity:
                     size_in_bytes = payload * dtype.byte_size()
                     # Assume only high BW domain is used
                     comm_time = int((size_in_bytes / self.bws[0]) * MICRO)
-                    yield self.env.timeout(comm_time, value=self.evt_data([op, "all_reduce_comm"]))
+                    yield self.env.timeout(comm_time, value=self.evt_data(op + ["all_reduce_comm"]))
                     yield self.tokens.get(1)
-                    yield self.env.timeout(1, value=self.evt_data([op, "all_reduce_complete"]))
+                    yield self.env.timeout(1, value=self.evt_data(op + ["all_reduce_complete"]))
                     break
                 else:
                     yield self.env.timeout(1)
