@@ -3,7 +3,7 @@ from enum import Enum
 from simpy.events import AllOf
 from simpy.util import start_delayed
 from typing import Tuple, List
-from utils import GIGA, MICRO, MILLI, EventData, Dtypes
+from utils import GIGA, MICRO, MILLI, EventData, Dtypes, ComponentType, next_cid
 from dataclasses import dataclass
 
 @dataclass
@@ -21,9 +21,10 @@ class Xpu:
         self.env = env
         self.tile_size = 128
         self.dev_id = dev_id
+        self.cid = next_cid()
 
     def evt_data(self, name):
-        return EventData(name, self.env.now, f"xpu_{self.dev_id}")
+        return EventData(name, self.env.now, ComponentType.XPU, self.cid, self.dev_id)
 
     def compute(self, flops, dtype, op):
         comp_time = int((flops / self.flops[dtype.value - 1]) * MICRO)

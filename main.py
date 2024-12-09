@@ -17,7 +17,8 @@ if __name__ == "__main__":
 
     xpu_specs = XpuSpecs((989000, 0.5), (3350, 0.7), (80, 0.85))
 
-    TP = 1
+    DP = 1
+    TP = 8
     B = 32
     S = 2048
     E = 12288
@@ -69,6 +70,7 @@ if __name__ == "__main__":
         # produce output
         yield env.process(xpu.matmul(1, B*S, E, V, dtype, [f"X@vocab"]))
         # Loss gradient
+        # One more all-reduce needed here - across dp dim
         yield env.process(xpu.matmul_bk(1, B*S, E, V, dtype, [f"bk_X@vocab"]))
         for l in range(L):
             yield env.process(xpu.matmul_bk(1, B*S, 4*E_tp, E, dtype, [f"bk_ffn2"]))
@@ -88,8 +90,10 @@ if __name__ == "__main__":
     env.process(tp_procs())
     env.run()
 
-    dump_perfetto(["xpu"], [["xpu0", "xpu1"]], data)
-    for d in data:
-        evt = d[2]
-        if isinstance(evt, simpy.events.Timeout) and evt.value is not None:
-            print(d[0], evt.value)
+    total_xpus = TP * DP
+    xpus = [f"xpu{i}" for i in range(total_xpus)]
+    dump_perfetto(["ccl", "xpu"], [["tp_comm"], xpus], data)
+    # for d in data:
+    #     evt = d[2]
+    #     if isinstance(evt, simpy.events.Timeout) and evt.value is not None:
+    #         print(d[0], evt.value)

@@ -1,6 +1,7 @@
 from functools import partial, wraps
 import simpy
 import numpy as np
+from utils import ComponentType
 
 def trace(env, callback):
     """Replace the ``step()`` method of *env* with a tracing function
@@ -55,7 +56,7 @@ def dump_perfetto(component_types, component_mat, data):
             pkts.append(tpkt)
             # define threads
             comp_list = component_mat[c_id]
-            for c_id, component in enumerate(comp_list):
+            for _, component in enumerate(comp_list):
                 thread_uuid = random_int64()
                 uuids.append(thread_uuid)
                 tpkt = trace_pb2.TracePacket()
@@ -89,8 +90,6 @@ def dump_perfetto(component_types, component_mat, data):
             ev_groups = {}
             et_groups = {}
             for i, e in enumerate(evts):
-                if e.src == "xpu_1": #FIXME
-                    continue
                 if ev_groups.get(e.start_time, None) is None:
                     ev_groups[e.start_time] = [e]
                     et_groups[e.start_time] = [end_times[i]]
@@ -120,16 +119,13 @@ def dump_perfetto(component_types, component_mat, data):
                             stack.append((et, evg[i]))
                 [evt_out.append(("END", et, ev)) for (et, ev) in reversed(stack)]
             return evt_out
-
-
         return sort_events(evts, end_times)
 
     def track_events(pkts, uuids, data):
         count = 0
         evts = get_timeout_evts(data)
         for (evt_type, timestamp, evt) in evts:
-            thread_uuid = uuids[0]
-            print(evt)
+            thread_uuid = uuids[evt.cid]
             evt_name = "_".join(evt.name)
             tpkt, tevt = tpkt_tevt()
             tevt.track_uuid = thread_uuid

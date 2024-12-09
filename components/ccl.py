@@ -1,14 +1,16 @@
 import simpy
-from utils import EventData, Dtypes, MICRO
+from utils import EventData, Dtypes, MICRO, ComponentType, next_cid
 
 class Ccl:
     def __init__(self, env, num_devices, bws):
         self.env = env
         self.tokens = simpy.Container(env, init=0, capacity=num_devices)
         self.bws = bws
+        self.cid = next_cid()
 
     def evt_data(self, name):
-        return EventData(name, self.env.now, "ccl")
+        return EventData(name, self.env.now, ComponentType.CCL, self.cid, 1)
+
     @staticmethod
     def oot_msg():
         return f"Ccl - No tokens available. {self.tokens.level}/{self.tokens.capacity})"

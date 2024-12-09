@@ -5,12 +5,29 @@ from enum import Enum
 GIGA = 10**9
 MILLI = 10**3
 MICRO = 10**6
+CID = 0
+
+def get_cid():
+    global CID
+    return CID
+
+def next_cid():
+    global CID
+    result = CID
+    CID = CID + 1
+    return result
+
+class ComponentType(Enum):
+    XPU = 1
+    CCL = 2
 
 @dataclass
 class EventData:
     name: List[str]
     start_time: int
-    src: str
+    cty: ComponentType
+    cid: int
+    tid: int
 
 class Dtypes(Enum):
     FP32 = 1
