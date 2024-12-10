@@ -18,8 +18,8 @@ if __name__ == "__main__":
 
     xpu_specs = XpuSpecs((989000, 0.5), (3350, 0.7), (80, 0.85))
 
-    DP = 1
-    TP = 2
+    DP = 2
+    TP = 8
     B = 32
     S = 2048
     E = 12288
@@ -27,15 +27,18 @@ if __name__ == "__main__":
     V = 50272
     L = 1
     bws = [900 * GIGA, 100 * GIGA]
+    bw_eff = [0.7, 0.7]
     dtype = Dtypes.FP16
     is_train = True
     has_bias = False
     param_count = 12*E*E + 5*E + 4*E if has_bias else 12*E*E
-    tp_comm = Ccl(env, TP, bws)
-    hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=5*GIGA)
+    tp_comms = [Ccl(env, [TP, 1], bws, bw_eff) for _ in range(DP)]
+    dp_comm = Ccl(env, [TP, DP], bws, bw_eff)
+    hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=500*GIGA)
 
     # TF graph on xpu
     def tformer(dev_id, L=1):
+        tp_comm = tp_comms[dev_id // TP]
         def add_opt_states(p, i, l):
             return [env.process(xpu.mem_fill(p, Dtypes.FP32, [f"{k}_{i}_{l}"]))
                     for k in ["momentum", "variance", "param"]]
@@ -75,7 +78,7 @@ if __name__ == "__main__":
         # produce output
         yield env.process(xpu.matmul(1, B*S, E, V, dtype, [f"X@vocab"]))
         # Loss gradient
-        # One more all-reduce needed here - across dp dim
+        yield env.process(dp_comm.all_reduce(B*S*V, dtype, [f"xpu_{dev_id}_loss_grad_partial"]))
         yield env.process(xpu.matmul_bk(1, B*S, E, V, dtype, [f"bk_X@vocab"]))
         for l in range(L):
             yield env.process(xpu.matmul_bk(1, B*S, 4*E_tp, E, dtype, [f"bk_ffn2"]))
@@ -93,13 +96,13 @@ if __name__ == "__main__":
         print(xpu.mem_rem())
 
     def tp_procs():
-        yield AllOf(env, [start_delayed(env, tformer(i, L=L), i+1) for i in range(TP)])
+        yield AllOf(env, [start_delayed(env, tformer(i, L=L), i+1) for i in range(TP*DP)])
     env.process(tp_procs())
     env.run()
 
     total_xpus = TP * DP
     xpus = [f"xpu{i}" for i in range(total_xpus)]
-    dump_perfetto(["ccl", "hps", "xpu"], [["tp_comm"], ["read", "write"], xpus], data)
+    dump_perfetto(["ccl", "hps", "xpu"], [[f"tp_comm{i}" for i in range(DP)] + ["dp_comm"], ["read", "write"], xpus], data)
     # for d in data:
     #     evt = d[2]
     #     if isinstance(evt, simpy.events.Timeout) and evt.value is not None:
