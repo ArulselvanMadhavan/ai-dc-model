@@ -20,6 +20,7 @@ def next_cid():
 class ComponentType(Enum):
     XPU = 1
     CCL = 2
+    HPS = 3
 
 @dataclass
 class EventData:

@@ -1,6 +1,7 @@
 import simpy
 from components.xpu import Xpu, Dtypes, XpuSpecs
 from components.ccl import Ccl
+from components.hps import Hps
 from trace import trace, monitor
 from functools import partial
 from simpy.events import AllOf
@@ -18,16 +19,20 @@ if __name__ == "__main__":
     xpu_specs = XpuSpecs((989000, 0.5), (3350, 0.7), (80, 0.85))
 
     DP = 1
-    TP = 8
+    TP = 2
     B = 32
     S = 2048
     E = 12288
     E_tp = E // TP
     V = 50272
+    L = 1
     bws = [900 * GIGA, 100 * GIGA]
     dtype = Dtypes.FP16
     is_train = True
+    has_bias = False
+    param_count = 12*E*E + 5*E + 4*E if has_bias else 12*E*E
     tp_comm = Ccl(env, TP, bws)
+    hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=5*GIGA)
 
     # TF graph on xpu
     def tformer(dev_id, L=1):
@@ -83,16 +88,18 @@ if __name__ == "__main__":
                 yield env.process(xpu.matmul_bk(1, B*S, E, E_tp, dtype, [f"X@W_{i}"]))
             yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-attn_ip_grad"]))
         yield env.process(xpu.matmul_bk(1, B*S, V, E, dtype, [f"X@emb"]))
+        yield env.process(hps.write(param_count, dtype, [f"xpu{dev_id}_wt_ckpt"]))
+        yield env.process(hps.write(3 * param_count, Dtypes.FP32, [f"xpu{dev_id}_opt_ckpt"]))
         print(xpu.mem_rem())
 
     def tp_procs():
-        yield AllOf(env, [start_delayed(env, tformer(i, L=1), i+1) for i in range(TP)])
+        yield AllOf(env, [start_delayed(env, tformer(i, L=L), i+1) for i in range(TP)])
     env.process(tp_procs())
     env.run()
 
     total_xpus = TP * DP
     xpus = [f"xpu{i}" for i in range(total_xpus)]
-    dump_perfetto(["ccl", "xpu"], [["tp_comm"], xpus], data)
+    dump_perfetto(["ccl", "hps", "xpu"], [["tp_comm"], ["read", "write"], xpus], data)
     # for d in data:
     #     evt = d[2]
     #     if isinstance(evt, simpy.events.Timeout) and evt.value is not None:

@@ -1,7 +1,8 @@
 import simpy
+from utils import next_cid
 
 class Link:
-    def __init__(self, env, rd_bw, wr_bw):
-        self.rsrc = simpy.Resource(env, capacity=1)
-        self.rd_bw = simpy.Container(env, init=0, capacity=rd_bw)
-        self.wr_bw = simpy.Container(env, init=0, capacity=wr_bw)
+    def __init__(self, env, bw, rx):
+        self.bw = simpy.Container(env, init=0, capacity=bw)
+        self.cid = next_cid()
+        self.rx = rx
