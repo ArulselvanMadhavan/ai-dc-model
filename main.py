@@ -47,7 +47,7 @@ if __name__ == "__main__":
         ffns = []
         xpu = Xpu(env, xpu_specs, dev_id)
         # Weight load
-        yield env.process(xpu.mem_fill(V*E, dtype, ["embed_load"]))
+        yield env.process(xpu.mem_fill(V*E_tp, dtype, ["embed_load"]))
         for l in range(L):
             QKVs = ["Q", "K", "V"]
             qkvs = qkvs + [env.process(xpu.mem_fill(E*E_tp, dtype, [f"W_{i}_{l}"])) for i in QKVs]
@@ -59,10 +59,11 @@ if __name__ == "__main__":
                 os = [p for i in FFNs for p in add_opt_states(E*4*E_tp, i, l)]
                 ffns = ffns + os
         yield AllOf(env, qkvs + ffns)
-        yield env.process(xpu.mem_fill(V*E, dtype, ["vocab_load"]))
+        yield env.process(xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"]))
         yield env.process(xpu.mem_fill(B*S*E, dtype, ["X"]))
+        yield env.process(xpu.matmul(1, B*S, V, E_tp, dtype, [f"X@emb"]))
+        yield env.process(tp_comm.all_gather(B*S*E_tp, dtype, [f"xpu{dev_id}-embed-gather"]))
 
-        yield env.process(xpu.matmul(1, B*S, V, E, dtype, [f"X@emb"]))
         # # for l layers
         # # Forward pass
         for l in range(L):
@@ -76,10 +77,11 @@ if __name__ == "__main__":
             yield env.process(xpu.matmul(1, B*S, 4*E_tp, E, dtype, [f"ffn2"]))
             yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-ffn_partial"]))
         # produce output
-        yield env.process(xpu.matmul(1, B*S, E, V, dtype, [f"X@vocab"]))
-        # Loss gradient
+        yield env.process(xpu.matmul(1, B*S, E, (V // TP), dtype, [f"X@vocab"]))
+        yield env.process(tp_comm.all_gather(B*S*(V // TP), dtype, [f"xpu{dev_id}-vocab_out-gather"]))
         yield env.process(dp_comm.all_reduce(B*S*V, dtype, [f"xpu_{dev_id}_loss_grad_partial"]))
-        yield env.process(xpu.matmul_bk(1, B*S, E, V, dtype, [f"bk_X@vocab"]))
+        yield env.process(xpu.matmul_bk(1, B*S, E, (V // TP), dtype, [f"bk_X@vocab"]))
+        yield env.process(tp_comm.all_gather(B*S*(V // TP), dtype, [f"xpu{dev_id}-bk_vocab_out-gather"]))
         for l in range(L):
             yield env.process(xpu.matmul_bk(1, B*S, 4*E_tp, E, dtype, [f"bk_ffn2"]))
             yield env.process(xpu.matmul_bk(1, B*S, E, 4*E_tp, dtype, [f"bk_ffn1"]))
@@ -90,9 +92,11 @@ if __name__ == "__main__":
             for i in QKVs:
                 yield env.process(xpu.matmul_bk(1, B*S, E, E_tp, dtype, [f"X@W_{i}"]))
             yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-attn_ip_grad"]))
-        yield env.process(xpu.matmul_bk(1, B*S, V, E, dtype, [f"X@emb"]))
-        yield env.process(hps.write(param_count, dtype, [f"xpu{dev_id}_wt_ckpt"]))
-        yield env.process(hps.write(3 * param_count, Dtypes.FP32, [f"xpu{dev_id}_opt_ckpt"]))
+        yield env.process(xpu.matmul_bk(1, B*S, V, E_tp, dtype, [f"X@emb"]))
+        yield env.process(tp_comm.all_gather(B*S*E_tp, dtype, [f"xpu{dev_id}-bk-embed-gather"]))
+
+        yield env.process(hps.write(param_count / (DP * TP), dtype, [f"xpu{dev_id}_wt_ckpt"]))
+        yield env.process(hps.write(3 * param_count / (DP * TP), Dtypes.FP32, [f"xpu{dev_id}_opt_ckpt"]))
         print(xpu.mem_rem())
 
     def tp_procs():
