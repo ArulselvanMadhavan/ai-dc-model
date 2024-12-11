@@ -60,20 +60,20 @@ class Ccl:
         if self.tokens.level < self.tokens.capacity:
             yield self.tokens.put(1)
             yield self.env.timeout(1, value=self.evt_data(op + ["init"]))
-            while True:
-                if self.tokens.level == self.tokens.capacity:
-                    size_in_bytes = payload * dtype.byte_size()
-                    match coll_type:
-                        case CollType.ALLREDUCE:
-                            comm_time = self.all_reduce_comm_time(size_in_bytes)
-                        case CollType.ALLGATHER:
-                            comm_time = self.all_gather_comm_time(size_in_bytes)
-                    yield self.env.timeout(comm_time, value=self.evt_data(op + ["comm"]))
-                    yield self.tokens.get(1)
-                    yield self.env.timeout(1, value=self.evt_data(op + ["complete"]))
-                    break
-                else:
-                    yield self.env.timeout(1)
+            # while True:
+                # if self.tokens.level == self.tokens.capacity:
+            size_in_bytes = payload * dtype.byte_size()
+            match coll_type:
+                case CollType.ALLREDUCE:
+                    comm_time = self.all_reduce_comm_time(size_in_bytes)
+                case CollType.ALLGATHER:
+                    comm_time = self.all_gather_comm_time(size_in_bytes)
+            yield self.env.timeout(comm_time, value=self.evt_data(op + ["comm"]))
+            yield self.tokens.get(1)
+            yield self.env.timeout(1, value=self.evt_data(op + ["complete"]))
+                #     break
+                # else:
+                #     yield self.env.timeout(1, value=None)
         else:
             raise Exception(Ccl.oot_msg)
 

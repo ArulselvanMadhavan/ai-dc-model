@@ -35,10 +35,10 @@ class Xpu:
         mem_time = int((bts / self.mem_bw) * MICRO)
         yield self.env.timeout(mem_time, value=self.evt_data(op + ["mem_rd" if is_read else "mem_wr"]))
 
-    def matmul(self, b, m, n, p, dtype, op):
+    def matmul(self, b, m, n, p, dtype, ckpt, op):
         wr_size = b * m * p
-
-        yield self.env.process(self.mem_fill(wr_size, dtype, op))
+        if ckpt:
+            yield self.env.process(self.mem_fill(wr_size, dtype, op))
 
         is_read = True
         rd_size = b * m * n + b * n * p

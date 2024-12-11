@@ -9,105 +9,32 @@ from utils import GIGA, MICRO, MILLI
 from simpy.events import AllOf
 from simpy.util import start_delayed
 from trace import dump_perfetto
-
+from models.tformer import vanilla_tformer_procs
 if __name__ == "__main__":
     env = simpy.Environment()
     data = []
     monitor = partial(monitor, data)
     trace(env, monitor)
 
-    xpu_specs = XpuSpecs((989000, 0.5), (3350, 0.7), (80, 0.85))
+    #h100_specs = XpuSpecs((989000, 0.5), (3350, 0.7), (80, 0.85))
+    a100_specs = XpuSpecs((312000, 0.47), (1935, 0.7), (80, 0.85))
+    xpu_specs = a100_specs
+    DP = 256
+    TP = 128
 
-    DP = 2
-    TP = 8
-    B = 32
-    S = 2048
-    E = 12288
-    E_tp = E // TP
-    V = 50272
-    L = 1
-    bws = [900 * GIGA, 100 * GIGA]
-    bw_eff = [0.7, 0.7]
-    dtype = Dtypes.FP16
-    is_train = True
-    has_bias = False
-    param_count = 12*E*E + 5*E + 4*E if has_bias else 12*E*E
-    tp_comms = [Ccl(env, [TP, 1], bws, bw_eff) for _ in range(DP)]
-    dp_comm = Ccl(env, [TP, DP], bws, bw_eff)
-    hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=500*GIGA)
-
-    # TF graph on xpu
-    def tformer(dev_id, L=1):
-        tp_comm = tp_comms[dev_id // TP]
-        def add_opt_states(p, i, l):
-            return [env.process(xpu.mem_fill(p, Dtypes.FP32, [f"{k}_{i}_{l}"]))
-                    for k in ["momentum", "variance", "param"]]
-
-        qkvs = []
-        ffns = []
-        xpu = Xpu(env, xpu_specs, dev_id)
-        # Weight load
-        yield env.process(xpu.mem_fill(V*E_tp, dtype, ["embed_load"]))
-        for l in range(L):
-            QKVs = ["Q", "K", "V"]
-            qkvs = qkvs + [env.process(xpu.mem_fill(E*E_tp, dtype, [f"W_{i}_{l}"])) for i in QKVs]
-            FFNs = ["ffn1", "ffn2"]
-            ffns = ffns + [env.process(xpu.mem_fill(E*4*E_tp, dtype, [f"W_{i}_{l}"])) for i in FFNs]
-            if is_train:
-                os = [p for i in QKVs for p in add_opt_states(E*E_tp, i, l)]
-                qkvs = qkvs + os
-                os = [p for i in FFNs for p in add_opt_states(E*4*E_tp, i, l)]
-                ffns = ffns + os
-        yield AllOf(env, qkvs + ffns)
-        yield env.process(xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"]))
-        yield env.process(xpu.mem_fill(B*S*E, dtype, ["X"]))
-        yield env.process(xpu.matmul(1, B*S, V, E_tp, dtype, [f"X@emb"]))
-        yield env.process(tp_comm.all_gather(B*S*E_tp, dtype, [f"xpu{dev_id}-embed-gather"]))
-
-        # # for l layers
-        # # Forward pass
-        for l in range(L):
-            for i in QKVs:
-                yield env.process(xpu.matmul(1, B*S, E, E_tp, dtype, [f"X@W_{i}"]))
-            yield env.process(xpu.matmul(B, S, E_tp, S, dtype, [f"Q@K^T"]))
-            yield env.process(xpu.matmul(B, S, S, E_tp, dtype, [f"A@V^T"]))
-            yield env.process(xpu.matmul(1, B*S, E_tp, E, dtype, [f"out_proj"]))
-            yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-attn_partial"]))
-            yield env.process(xpu.matmul(1, B*S, E, 4*E_tp, dtype, [f"ffn1"]))
-            yield env.process(xpu.matmul(1, B*S, 4*E_tp, E, dtype, [f"ffn2"]))
-            yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-ffn_partial"]))
-        # produce output
-        yield env.process(xpu.matmul(1, B*S, E, (V // TP), dtype, [f"X@vocab"]))
-        yield env.process(tp_comm.all_gather(B*S*(V // TP), dtype, [f"xpu{dev_id}-vocab_out-gather"]))
-        yield env.process(dp_comm.all_reduce(B*S*V, dtype, [f"xpu_{dev_id}_loss_grad_partial"]))
-        yield env.process(xpu.matmul_bk(1, B*S, E, (V // TP), dtype, [f"bk_X@vocab"]))
-        yield env.process(tp_comm.all_gather(B*S*(V // TP), dtype, [f"xpu{dev_id}-bk_vocab_out-gather"]))
-        for l in range(L):
-            yield env.process(xpu.matmul_bk(1, B*S, 4*E_tp, E, dtype, [f"bk_ffn2"]))
-            yield env.process(xpu.matmul_bk(1, B*S, E, 4*E_tp, dtype, [f"bk_ffn1"]))
-            yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-ffn_grad"]))
-            yield env.process(xpu.matmul_bk(1, B*S, E_tp, E, dtype, [f"out_proj"]))
-            yield env.process(xpu.matmul_bk(B, S, S, E_tp, dtype, [f"A@V^T"]))
-            yield env.process(xpu.matmul_bk(B, S, E_tp, S, dtype, [f"Q@K^T"]))
-            for i in QKVs:
-                yield env.process(xpu.matmul_bk(1, B*S, E, E_tp, dtype, [f"X@W_{i}"]))
-            yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-attn_ip_grad"]))
-        yield env.process(xpu.matmul_bk(1, B*S, V, E_tp, dtype, [f"X@emb"]))
-        yield env.process(tp_comm.all_gather(B*S*E_tp, dtype, [f"xpu{dev_id}-bk-embed-gather"]))
-
-        yield env.process(hps.write(param_count / (DP * TP), dtype, [f"xpu{dev_id}_wt_ckpt"]))
-        yield env.process(hps.write(3 * param_count / (DP * TP), Dtypes.FP32, [f"xpu{dev_id}_opt_ckpt"]))
-        print(xpu.mem_rem())
-
-    def tp_procs():
-        yield AllOf(env, [start_delayed(env, tformer(i, L=L), i+1) for i in range(TP*DP)])
-    env.process(tp_procs())
+    env.process(vanilla_tformer_procs(env, xpu_specs, TP, DP))
     env.run()
-
-    total_xpus = TP * DP
+    total_xpus = 1 * 1
     xpus = [f"xpu{i}" for i in range(total_xpus)]
     dump_perfetto(["ccl", "hps", "xpu"], [[f"tp_comm{i}" for i in range(DP)] + ["dp_comm"], ["read", "write"], xpus], data)
+
     # for d in data:
     #     evt = d[2]
     #     if isinstance(evt, simpy.events.Timeout) and evt.value is not None:
     #         print(d[0], evt.value)
+
+    for d in reversed(data):
+        evt = d[2]
+        if isinstance(evt, simpy.events.Timeout) and evt.value is not None:
+            print(d[0], evt.value)
+            break
