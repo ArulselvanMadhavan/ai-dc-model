@@ -19,8 +19,8 @@ if __name__ == "__main__":
     #h100_specs = XpuSpecs((989000, 0.5), (3350, 0.7), (80, 0.85))
     a100_specs = XpuSpecs((312000, 0.47), (1935, 0.7), (80, 0.85))
     xpu_specs = a100_specs
-    DP = 100
-    TP = 128
+    DP = 21
+    TP = 48
 
     env.process(vanilla_tformer_procs(env, xpu_specs, TP, DP))
     env.run()

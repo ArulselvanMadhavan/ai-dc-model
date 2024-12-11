@@ -23,6 +23,7 @@ class Xpu:
         self.dev_id = dev_id
         self.cid = next_cid()
         self.mem_cap_cid = next_cid()
+        self.mem_contents = {}
 
     def evt_data(self, name):
         return EventData(name, self.env.now, ComponentType.XPU, self.cid, self.dev_id)
@@ -95,8 +96,8 @@ class Xpu:
         l_wr = self.env.process(self.mem_access(l_grad, is_read, dtype, l_grad_op))
         yield AllOf(self.env, [l_rd, l_comp, l_wr])
         out_free = self.env.process(self.mem_free(out, dtype, op)) # Free output loss grad
-        w_free = self.env.process(self.mem_free(wt_grad, dtype, op)) # Free w_grad
-        act_free = self.env.process(self.mem_free(inp, dtype, op)) # Free act grad
+        w_free = self.env.process(self.mem_free(wt_grad, dtype, wt_grad_op)) # Free w_grad
+        act_free = self.env.process(self.mem_free(inp, dtype, l_grad_op)) # Free act grad
         yield AllOf(self.env, [out_free, w_free, act_free])
 
 
@@ -106,6 +107,11 @@ class Xpu:
 
     def mem_fill(self, size, dtype, op):
         size_in_bytes = size * dtype.byte_size()
+        op_name = "_".join(op)
+        if self.mem_contents.get(op_name, None) is None:
+            self.mem_contents[op_name] = 1
+        else:
+            self.mem_contents[op_name] += 1
         if (self.memory.level + size_in_bytes) < self.memory.capacity:
             yield self.memory.put(size_in_bytes)
             yield self.env.timeout(1, value=self.evt_data(op + ["mem_fill"]))
@@ -115,6 +121,11 @@ class Xpu:
 
     def mem_free(self, size, dtype, op):
         size_in_bytes = size * dtype.byte_size()
+        op_name = "_".join(op)
+        if self.mem_contents.get(op_name, None) is None:
+            raise Exception(f"This should not happen", op_name)
+        else:
+            self.mem_contents[op_name] -= 1
         if (self.memory.level - size_in_bytes) >= 0:
             yield self.memory.get(size_in_bytes)
             yield self.env.timeout(1, value=self.evt_data(op + ["mem_free"]))
