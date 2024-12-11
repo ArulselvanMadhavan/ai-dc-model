@@ -19,7 +19,7 @@ if __name__ == "__main__":
     #h100_specs = XpuSpecs((989000, 0.5), (3350, 0.7), (80, 0.85))
     a100_specs = XpuSpecs((312000, 0.47), (1935, 0.7), (80, 0.85))
     xpu_specs = a100_specs
-    DP = 256
+    DP = 100
     TP = 128
 
     env.process(vanilla_tformer_procs(env, xpu_specs, TP, DP))
@@ -27,7 +27,10 @@ if __name__ == "__main__":
     total_xpus = 1 * 1
     xpus = [f"xpu{i}" for i in range(total_xpus)]
     dump_perfetto(["ccl", "hps", "xpu", "hbm"],
-                  [[f"tp_comm{i}" for i in range(1)] + ["dp_comm"], ["read", "write"], xpus, ["ctr_mem_capacity"]],
+                  [[f"tp_comm{i}" for i in range(1)] + ["dp_comm" for i in range(1)],
+                   ["read", "write"],
+                   xpus,
+                   ["ctr_mem_capacity"]],
                   data)
 
     # for d in data:

@@ -1,5 +1,5 @@
 import simpy
-from utils import EventData, Dtypes, MICRO, ComponentType, next_cid
+from utils import EventData, Dtypes, MICRO, ComponentType, next_cid, GIGA
 from typing import Tuple
 import numpy as np
 from enum import Enum
@@ -28,15 +28,22 @@ class Ccl:
         return f"Ccl - No tokens available. {self.tokens.level}/{self.tokens.capacity})"
 
     def all_reduce_comm_time(self, size_in_bytes):
-        payload_hbw = size_in_bytes / self.dev_split[1]
-        # Assume all2all in hbw
+        per_device_chunk = size_in_bytes / np.prod(self.dev_split)
+        payload_hbw = per_device_chunk * self.dev_split[1]
         comm_hbw = int((payload_hbw / self.bw_split[0]) * MICRO)
         # Assume ring in scale-out
-        payload_lbw = size_in_bytes / (np.prod(self.dev_split))
+        payload_lbw = per_device_chunk
         num_steps = self.dev_split[1] - 1
-        comm_lbw = int((payload_lbw / self.bw_split[0]) * MICRO)
+        comm_lbw = int((payload_lbw / self.bw_split[1]) * MICRO)
         comm_lbw = comm_lbw * num_steps
         comm_time = comm_hbw + comm_lbw
+
+        # print("BxSxE(in GB):", size_in_bytes/GIGA)
+        # print("payload(hbw):", payload_hbw / GIGA)
+        # print("comm_time(hbw):", comm_hbw/MICRO)
+        # print("payload(lbw):", payload_lbw / GIGA)
+        # print("comm_time(lbw):", comm_lbw/MICRO)
+        # print("total:", comm_time / MICRO)
         # all-gather lbw
         # reduce-scatter-hbw
         # 1 2 3 4 - [1p, 5p] [2p, 6p] [3p, 7p] [4p, 8p]

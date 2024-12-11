@@ -14,6 +14,7 @@ def vanilla_tformer_procs(env, xpu_specs, TP, DP):
     B = 978 // DP
     S = 2048
     E = 12288
+    assert E % TP == 0, "TP dim size should divide embedding dimension"
     H = 4 * E
     E_tp = E // TP
     V = 50272
@@ -24,12 +25,11 @@ def vanilla_tformer_procs(env, xpu_specs, TP, DP):
     is_train = True
     has_bias = False
     param_count = 4*E*E + 4*E + 2*E*H + E + H if has_bias else 4*E*E + 2*E*H
-    # tp_comms = [Ccl(env, [TP, 1], bws, bw_eff) for _ in range(DP)]
-    tp_comm = Ccl(env, [TP, 1], bws, bw_eff)
+    gpus_per_box = 8
+    tp_comm = Ccl(env, [gpus_per_box, TP//gpus_per_box], bws, bw_eff)
     dp_comm = Ccl(env, [TP, DP], bws, bw_eff)
     hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=500*GIGA)
 
-    # TF graph on xpu
     def tformer(dev_id, L=1):
         #tp_comm = tp_comms[dev_id // TP]
         def add_opt_states(p, i, l):
@@ -75,7 +75,7 @@ def vanilla_tformer_procs(env, xpu_specs, TP, DP):
         # produce output
         yield env.process(xpu.matmul(1, B*S, E, (V // TP), dtype, True, [f"X@vocab"]))
         yield env.process(tp_comm.all_gather(B*S*(V // TP), dtype, [f"xpu{dev_id}-vocab_out-gather"]))
-        yield env.process(dp_comm.all_reduce(B*S*V, dtype, [f"xpu_{dev_id}_loss_grad_partial"]))
+        yield env.process(dp_comm.all_reduce(G*S*V, dtype, [f"xpu_{dev_id}_loss_grad_partial"]))
         yield env.process(xpu.matmul_bk(1, B*S, E, (V // TP), dtype, [f"bk_X@vocab"]))
         yield env.process(tp_comm.all_gather(B*S*(V // TP), dtype, [f"xpu{dev_id}-bk_vocab_out-gather"]))
         for l in range(L):
