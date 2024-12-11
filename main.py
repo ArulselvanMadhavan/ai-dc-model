@@ -9,7 +9,7 @@ from utils import GIGA, MICRO, MILLI
 from simpy.events import AllOf
 from simpy.util import start_delayed
 from trace import dump_perfetto
-from models.tformer import vanilla_tformer_procs, ModelSpecs
+from models.tformer import vanilla_tformer_procs, ModelSpecs, ClusterSpecs
 
 if __name__ == "__main__":
     env = simpy.Environment()
@@ -17,15 +17,15 @@ if __name__ == "__main__":
     monitor = partial(monitor, data)
     trace(env, monitor)
 
-    #h100_specs = XpuSpecs((989000, 0.5), (3350, 0.7), (80, 0.85))
     a100_specs = XpuSpecs((312000, 0.47), (1935, 0.7), (80, 0.85))
-    opt175b = ModelSpecs(1000, 2048, 12288, 4*12288, 50272, 96)
+    opt175b = ModelSpecs(1000, 2048, 12288, 4*12288, 50272, 96, True, True)
+    cluster_specs = ClusterSpecs(48, 21, 600*GIGA, 100*GIGA)
     xpu_specs = a100_specs
     model_specs = opt175b
     DP = 21
     TP = 48
 
-    env.process(vanilla_tformer_procs(env, xpu_specs, model_specs, TP, DP))
+    env.process(vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs))
     env.run()
     total_xpus = 1 * 1
     xpus = [f"xpu{i}" for i in range(total_xpus)]
