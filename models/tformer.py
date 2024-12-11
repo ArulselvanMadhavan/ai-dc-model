@@ -8,17 +8,27 @@ from simpy.events import AllOf
 from utils import GIGA, MICRO, MILLI
 from simpy.events import AllOf
 from simpy.util import start_delayed
+from dataclasses import dataclass
 
-def vanilla_tformer_procs(env, xpu_specs, TP, DP):
-    G = 978
-    B = 978 // DP
-    S = 2048
-    E = 12288
+@dataclass
+class ModelSpecs:
+    G: int
+    S: int
+    E: int
+    H: int
+    V: int
+    L: int
+
+def vanilla_tformer_procs(env, xpu_specs, model_specs, TP, DP):
+    G = model_specs.G
+    B = G // DP
+    S = model_specs.S
+    E = model_specs.E
     assert E % TP == 0, "TP dim size should divide embedding dimension"
-    H = 4 * E
-    E_tp = E // TP
-    V = 50272
-    L = 96
+    H = model_specs.H
+    E_tp = model_specs.E // TP
+    V = model_specs.V
+    L = model_specs.L
     bws = [600 * GIGA, 100 * GIGA]
     bw_eff = [0.7, 0.7]
     dtype = Dtypes.FP16
