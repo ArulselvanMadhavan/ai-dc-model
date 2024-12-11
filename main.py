@@ -26,7 +26,9 @@ if __name__ == "__main__":
     env.run()
     total_xpus = 1 * 1
     xpus = [f"xpu{i}" for i in range(total_xpus)]
-    dump_perfetto(["ccl", "hps", "xpu"], [[f"tp_comm{i}" for i in range(DP)] + ["dp_comm"], ["read", "write"], xpus], data)
+    dump_perfetto(["ccl", "hps", "xpu", "hbm"],
+                  [[f"tp_comm{i}" for i in range(1)] + ["dp_comm"], ["read", "write"], xpus, ["ctr_mem_capacity"]],
+                  data)
 
     # for d in data:
     #     evt = d[2]

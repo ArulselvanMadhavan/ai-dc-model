@@ -3,7 +3,7 @@ from enum import Enum
 from simpy.events import AllOf
 from simpy.util import start_delayed
 from typing import Tuple, List
-from utils import GIGA, MICRO, MILLI, EventData, Dtypes, ComponentType, next_cid
+from utils import GIGA, MICRO, MILLI, EventData, Dtypes, ComponentType, next_cid, CounterData
 from dataclasses import dataclass
 
 @dataclass
@@ -22,6 +22,7 @@ class Xpu:
         self.tile_size = 128
         self.dev_id = dev_id
         self.cid = next_cid()
+        self.mem_cap_cid = next_cid()
 
     def evt_data(self, name):
         return EventData(name, self.env.now, ComponentType.XPU, self.cid, self.dev_id)
@@ -108,6 +109,7 @@ class Xpu:
         if (self.memory.level + size_in_bytes) < self.memory.capacity:
             yield self.memory.put(size_in_bytes)
             yield self.env.timeout(1, value=self.evt_data(op + ["mem_fill"]))
+            yield self.env.timeout(1, value=CounterData(self.memory.level / self.memory.capacity, self.mem_cap_cid))
         else:
             raise Exception(Xpu.oom_msg(size_in_bytes, self.memory.capacity - self.memory.level))
 

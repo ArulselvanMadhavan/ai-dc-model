@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0btrace.proto\"%\n\x05Trace\x12\x1c\n\x06packet\x18\x01 \x03(\x0b\x32\x0c.TracePacket\"\xde\x01\n\nTrackEvent\x12\x12\n\x08name_iid\x18\n \x01(\x04H\x00\x12\x0e\n\x04name\x18\x17 \x01(\tH\x00\x12\x1e\n\x04type\x18\t \x01(\x0e\x32\x10.TrackEvent.Type\x12\x12\n\ntrack_uuid\x18\x0b \x01(\x04\"j\n\x04Type\x12\x14\n\x10TYPE_UNSPECIFIED\x10\x00\x12\x14\n\x10TYPE_SLICE_BEGIN\x10\x01\x12\x12\n\x0eTYPE_SLICE_END\x10\x02\x12\x10\n\x0cTYPE_INSTANT\x10\x03\x12\x10\n\x0cTYPE_COUNTER\x10\x04\x42\x0c\n\nname_field\"6\n\x11ProcessDescriptor\x12\x0b\n\x03pid\x18\x01 \x01(\x05\x12\x14\n\x0cprocess_name\x18\x06 \x01(\t\"A\n\x10ThreadDescriptor\x12\x0b\n\x03pid\x18\x01 \x01(\x05\x12\x0b\n\x03tid\x18\x02 \x01(\x05\x12\x13\n\x0bthread_name\x18\x05 \x01(\t\"\xbd\x01\n\x0fTrackDescriptor\x12\x0c\n\x04uuid\x18\x01 \x01(\x04\x12\x13\n\x0bparent_uuid\x18\x05 \x01(\x04\x12\x0e\n\x04name\x18\x02 \x01(\tH\x00\x12\x15\n\x0bstatic_name\x18\n \x01(\tH\x00\x12#\n\x07process\x18\x03 \x01(\x0b\x32\x12.ProcessDescriptor\x12!\n\x06thread\x18\x04 \x01(\x0b\x32\x11.ThreadDescriptorB\x18\n\x16static_or_dynamic_name\"\xe3\x01\n\x0bTracePacket\x12\x11\n\ttimestamp\x18\x08 \x01(\x04\x12\x1a\n\x12timestamp_clock_id\x18: \x01(\r\x12\"\n\x0btrack_event\x18\x0b \x01(\x0b\x32\x0b.TrackEventH\x00\x12,\n\x10track_descriptor\x18< \x01(\x0b\x32\x10.TrackDescriptorH\x00\x12$\n\x1atrusted_packet_sequence_id\x18\n \x01(\rH\x01\x42\x06\n\x04\x64\x61taB%\n#optional_trusted_packet_sequence_id')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0btrace.proto\"%\n\x05Trace\x12\x1c\n\x06packet\x18\x01 \x03(\x0b\x32\x0c.TracePacket\"\xae\x02\n\nTrackEvent\x12\x12\n\x08name_iid\x18\n \x01(\x04H\x00\x12\x0e\n\x04name\x18\x17 \x01(\tH\x00\x12\x1e\n\x04type\x18\t \x01(\x0e\x32\x10.TrackEvent.Type\x12\x12\n\ntrack_uuid\x18\x0b \x01(\x04\x12\x17\n\rcounter_value\x18\x1e \x01(\x03H\x01\x12\x1e\n\x14\x64ouble_counter_value\x18, \x01(\x01H\x01\"j\n\x04Type\x12\x14\n\x10TYPE_UNSPECIFIED\x10\x00\x12\x14\n\x10TYPE_SLICE_BEGIN\x10\x01\x12\x12\n\x0eTYPE_SLICE_END\x10\x02\x12\x10\n\x0cTYPE_INSTANT\x10\x03\x12\x10\n\x0cTYPE_COUNTER\x10\x04\x42\x0c\n\nname_fieldB\x15\n\x13\x63ounter_value_field\"6\n\x11ProcessDescriptor\x12\x0b\n\x03pid\x18\x01 \x01(\x05\x12\x14\n\x0cprocess_name\x18\x06 \x01(\t\"A\n\x10ThreadDescriptor\x12\x0b\n\x03pid\x18\x01 \x01(\x05\x12\x0b\n\x03tid\x18\x02 \x01(\x05\x12\x13\n\x0bthread_name\x18\x05 \x01(\t\"\x13\n\x11\x43ounterDescriptor\"\xe2\x01\n\x0fTrackDescriptor\x12\x0c\n\x04uuid\x18\x01 \x01(\x04\x12\x13\n\x0bparent_uuid\x18\x05 \x01(\x04\x12\x0e\n\x04name\x18\x02 \x01(\tH\x00\x12\x15\n\x0bstatic_name\x18\n \x01(\tH\x00\x12#\n\x07process\x18\x03 \x01(\x0b\x32\x12.ProcessDescriptor\x12!\n\x06thread\x18\x04 \x01(\x0b\x32\x11.ThreadDescriptor\x12#\n\x07\x63ounter\x18\x08 \x01(\x0b\x32\x12.CounterDescriptorB\x18\n\x16static_or_dynamic_name\"\xe3\x01\n\x0bTracePacket\x12\x11\n\ttimestamp\x18\x08 \x01(\x04\x12\x1a\n\x12timestamp_clock_id\x18: \x01(\r\x12\"\n\x0btrack_event\x18\x0b \x01(\x0b\x32\x0b.TrackEventH\x00\x12,\n\x10track_descriptor\x18< \x01(\x0b\x32\x10.TrackDescriptorH\x00\x12$\n\x1atrusted_packet_sequence_id\x18\n \x01(\rH\x01\x42\x06\n\x04\x64\x61taB%\n#optional_trusted_packet_sequence_id')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,15 +34,17 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_TRACE']._serialized_start=15
   _globals['_TRACE']._serialized_end=52
   _globals['_TRACKEVENT']._serialized_start=55
-  _globals['_TRACKEVENT']._serialized_end=277
-  _globals['_TRACKEVENT_TYPE']._serialized_start=157
-  _globals['_TRACKEVENT_TYPE']._serialized_end=263
-  _globals['_PROCESSDESCRIPTOR']._serialized_start=279
-  _globals['_PROCESSDESCRIPTOR']._serialized_end=333
-  _globals['_THREADDESCRIPTOR']._serialized_start=335
-  _globals['_THREADDESCRIPTOR']._serialized_end=400
-  _globals['_TRACKDESCRIPTOR']._serialized_start=403
-  _globals['_TRACKDESCRIPTOR']._serialized_end=592
-  _globals['_TRACEPACKET']._serialized_start=595
-  _globals['_TRACEPACKET']._serialized_end=822
+  _globals['_TRACKEVENT']._serialized_end=357
+  _globals['_TRACKEVENT_TYPE']._serialized_start=214
+  _globals['_TRACKEVENT_TYPE']._serialized_end=320
+  _globals['_PROCESSDESCRIPTOR']._serialized_start=359
+  _globals['_PROCESSDESCRIPTOR']._serialized_end=413
+  _globals['_THREADDESCRIPTOR']._serialized_start=415
+  _globals['_THREADDESCRIPTOR']._serialized_end=480
+  _globals['_COUNTERDESCRIPTOR']._serialized_start=482
+  _globals['_COUNTERDESCRIPTOR']._serialized_end=501
+  _globals['_TRACKDESCRIPTOR']._serialized_start=504
+  _globals['_TRACKDESCRIPTOR']._serialized_end=730
+  _globals['_TRACEPACKET']._serialized_start=733
+  _globals['_TRACEPACKET']._serialized_end=960
 # @@protoc_insertion_point(module_scope)

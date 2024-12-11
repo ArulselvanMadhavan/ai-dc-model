@@ -30,6 +30,11 @@ class EventData:
     cid: int
     tid: int
 
+@dataclass
+class CounterData:
+    count: float
+    cid: int
+
 class Dtypes(Enum):
     FP32 = 1
     FP16 = 2                    # FP16 = BF16 in Nvidia H100

@@ -1,7 +1,7 @@
 from functools import partial, wraps
 import simpy
 import numpy as np
-from utils import ComponentType
+from utils import ComponentType, EventData, CounterData, get_cid
 
 def trace(env, callback):
     """Replace the ``step()`` method of *env* with a tracing function
@@ -65,9 +65,12 @@ def dump_perfetto(component_types, component_mat, data):
                 tdesc.uuid = thread_uuid
                 tdesc.parent_uuid = proc_uuid
                 tdesc.name = component
-                tdesc.thread.pid = c_id
-                tdesc.thread.tid = thread_count
-                tdesc.thread.thread_name = component
+                if "ctr_" in component:
+                    tdesc.counter.CopyFrom(trace_pb2.CounterDescriptor())
+                else:
+                    tdesc.thread.pid = c_id
+                    tdesc.thread.tid = thread_count
+                    tdesc.thread.thread_name = component
                 tpkt.track_descriptor.CopyFrom(tdesc)
                 pkts.append(tpkt)
                 thread_count += 1
@@ -77,15 +80,18 @@ def dump_perfetto(component_types, component_mat, data):
         evts = []
         start_times = []
         end_times = []
+        cevts = []
         for d in data:
             event = d[2]
-            if isinstance(event, simpy.events.Timeout) and event.value is not None:
+            if isinstance(event, simpy.events.Timeout) and isinstance(event.value, EventData):
                 evt = event.value
                 evts.append(evt)
                 start_times.append(evt.start_time)
                 end_times.append(d[0])
+            elif isinstance(event, simpy.events.Timeout) and isinstance(event.value, CounterData):
+                evt = event.value
+                cevts.append((d[0], evt))
         # group by start_times
-
         def sort_events(evts, etimes):
             ev_groups = {}
             et_groups = {}
@@ -119,11 +125,11 @@ def dump_perfetto(component_types, component_mat, data):
                             stack.append((et, evg[i]))
                 [evt_out.append(("END", et, ev)) for (et, ev) in reversed(stack)]
             return evt_out
-        return sort_events(evts, end_times)
+        return sort_events(evts, end_times), cevts
 
     def track_events(pkts, uuids, data):
         count = 0
-        evts = get_timeout_evts(data)
+        evts, cevts = get_timeout_evts(data)
         for (evt_type, timestamp, evt) in evts:
             thread_uuid = uuids[evt.cid]
             evt_name = "_".join(evt.name)
@@ -134,7 +140,17 @@ def dump_perfetto(component_types, component_mat, data):
             tpkt.timestamp = timestamp
             tpkt.track_event.CopyFrom(tevt)
             pkts.append(tpkt)
+        for (now, evt) in cevts:
+            thread_uuid = uuids[evt.cid]
+            tpkt, tevt = tpkt_tevt()
+            tevt.track_uuid = thread_uuid
+            tevt.type = trace_pb2.TrackEvent.Type.TYPE_COUNTER
+            tevt.double_counter_value = evt.count
+            tpkt.timestamp = now
+            tpkt.track_event.CopyFrom(tevt)
+            pkts.append(tpkt)
 
+    print("cid:", get_cid())
     trace = trace_pb2.Trace()
     track_uuids = track_descriptors(component_types, component_mat, trace.packet)
     track_events(trace.packet, track_uuids, data)

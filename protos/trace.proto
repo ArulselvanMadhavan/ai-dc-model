@@ -16,6 +16,10 @@ message TrackEvent {
   }
   optional Type type = 9;
   optional uint64 track_uuid = 11;
+  oneof counter_value_field {
+      int64 counter_value = 30;
+      double double_counter_value = 44;
+  }
 }
 
 message ProcessDescriptor {
@@ -28,6 +32,8 @@ message ThreadDescriptor {
   optional int32 tid = 2;
   optional string thread_name = 5;
 }
+message CounterDescriptor {
+}
 
 message TrackDescriptor {
   optional uint64 uuid = 1;
@@ -38,6 +44,7 @@ message TrackDescriptor {
   }
   optional ProcessDescriptor process = 3;
   optional ThreadDescriptor thread = 4;
+  optional CounterDescriptor counter = 8;
 }
 
 message TracePacket {

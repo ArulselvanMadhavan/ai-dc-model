@@ -24,20 +24,21 @@ def vanilla_tformer_procs(env, xpu_specs, TP, DP):
     is_train = True
     has_bias = False
     param_count = 4*E*E + 4*E + 2*E*H + E + H if has_bias else 4*E*E + 2*E*H
-    tp_comms = [Ccl(env, [TP, 1], bws, bw_eff) for _ in range(DP)]
+    # tp_comms = [Ccl(env, [TP, 1], bws, bw_eff) for _ in range(DP)]
+    tp_comm = Ccl(env, [TP, 1], bws, bw_eff)
     dp_comm = Ccl(env, [TP, DP], bws, bw_eff)
     hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=500*GIGA)
 
     # TF graph on xpu
     def tformer(dev_id, L=1):
-        tp_comm = tp_comms[dev_id // TP]
+        #tp_comm = tp_comms[dev_id // TP]
         def add_opt_states(p, i, l):
             return [env.process(xpu.mem_fill(p, Dtypes.FP32, [f"{k}_{i}_{l}"]))
                     for k in ["momentum", "variance", "param"]]
 
         qkvs = []
         ffns = []
-        xpu = Xpu(env, xpu_specs, dev_id)
+        xpu = Xpu(env, xpu_specs, dev_id) # Every xpu takes up two cids
         # Weight load
         yield env.process(xpu.mem_fill(V*E_tp, dtype, ["embed_load"]))
         for l in range(L):

@@ -61,7 +61,7 @@ class Ccl:
             yield self.tokens.put(1)
             yield self.env.timeout(1, value=self.evt_data(op + ["init"]))
             # while True:
-                # if self.tokens.level == self.tokens.capacity:
+            #     if self.tokens.level == self.tokens.capacity:
             size_in_bytes = payload * dtype.byte_size()
             match coll_type:
                 case CollType.ALLREDUCE:
@@ -71,9 +71,9 @@ class Ccl:
             yield self.env.timeout(comm_time, value=self.evt_data(op + ["comm"]))
             yield self.tokens.get(1)
             yield self.env.timeout(1, value=self.evt_data(op + ["complete"]))
-                #     break
+            # break
                 # else:
-                #     yield self.env.timeout(1, value=None)
+                #     yield self.env.timeout(1000, value=None)
         else:
             raise Exception(Ccl.oot_msg)
 
