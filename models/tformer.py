@@ -10,6 +10,19 @@ from simpy.events import AllOf
 from simpy.util import start_delayed
 from dataclasses import dataclass
 
+
+def calc_conv_out_dim(dim, padding, dilation, kernel_size, stride):
+    """https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html"""
+    res = (dim + (2 * padding) - dilation * (kernel_size - 1) - 1) // stride
+    return res + 1
+
+@dataclass
+class VisionSpecs:
+    H: int
+    W: int
+    P: int
+    C: int
+
 @dataclass
 class ModelSpecs:
     G: int
@@ -20,6 +33,7 @@ class ModelSpecs:
     L: int
     is_train: bool
     freeze: bool
+    vision: VisionSpecs
 
 @dataclass
 class ClusterSpecs:
@@ -51,6 +65,15 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     dp_comm = Ccl(env, [TP, DP], bws, bw_eff)
     hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=500*GIGA)
     freeze = model_specs.freeze
+    is_vision = model_specs.vision is not None
+    is_text = not is_vision
+    if is_vision:
+        vision_specs = model_specs.vision
+        H_out = calc_conv_out_dim(vision_specs.H, 0, 1, vision_specs.P, vision_specs.P)
+        W_out = calc_conv_out_dim(vision_specs.W, 0, 1, vision_specs.P, vision_specs.P)
+        S = H_out * W_out
+        C = vision_specs.C
+        K = vision_specs.P
     def tformer(dev_id, L=1):
         #tp_comm = tp_comms[dev_id // TP]
         def add_opt_states(p, i, l):
@@ -61,7 +84,10 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         ffns = []
         xpu = Xpu(env, xpu_specs, dev_id) # Every xpu takes up two cids
         # Weight load
-        yield env.process(xpu.mem_fill(V*E_tp, dtype, ["embed_load"]))
+        if is_text:
+            yield env.process(xpu.mem_fill(V*E_tp, dtype, ["embed_load"]))
+        elif is_vision:
+            yield env.process(xpu.mem_fill(E_tp * vision_specs.C * vision_specs.P * vision_specs.P, dtype, ["conv_kernel_load"]))
         for l in range(L):
             QKVs = ["Q", "K", "V"]
             qkvs = qkvs + [env.process(xpu.mem_fill(E*E_tp, dtype, [f"W_{i}"])) for i in QKVs]
@@ -73,11 +99,14 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
                 os = [p for i in FFNs for p in add_opt_states(E*4*E_tp, i, l)]
                 ffns = ffns + os
         yield AllOf(env, qkvs + ffns)
-        yield env.process(xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"]))
-        yield env.process(xpu.mem_fill(B*S*E, dtype, ["X"]))
-        yield env.process(xpu.matmul(1, B*S, V, E_tp, dtype, True, [f"X@emb"]))
-        yield env.process(tp_comm.all_gather(B*S*E_tp, dtype, [f"xpu{dev_id}-embed-gather"]))
-
+        if is_text:
+            yield env.process(xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"]))
+            yield env.process(xpu.mem_fill(B*S*E, dtype, ["X"]))
+            yield env.process(xpu.matmul(1, B*S, V, E_tp, dtype, True, [f"X@emb"]))
+            yield env.process(tp_comm.all_gather(B*S*E, dtype, [f"xpu{dev_id}-embed-gather"]))
+        elif is_vision:
+            yield env.process(xpu.matmul(1, B*H_out*W_out, C*K*K, E_tp, dtype, True, ["image-embed-gen"]))
+            yield env.process(tp_comm.all_gather(B*H_out*W_out*E, dtype,[f"img-emb-gather"]))
         # # Forward pass
         def fwd_pass(ckpt):
             yield env.process(xpu.mem_fill(B*S*E_tp, dtype, [f"xpu_{dev_id}-act-ckpt"]))
@@ -120,20 +149,25 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
                 yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-attn_ip_grad"]))
                 yield env.process(xpu.mem_free(B*S*E_tp, dtype, [f"xpu_{dev_id}-act-ckpt"]))
 
+        # Train
         for l in range(L):
             yield env.process(fwd_pass(ckpt=False))
-        # produce output
         yield env.process(xpu.matmul(1, B*S, E, (V // TP), dtype, True, [f"X@vocab"]))
-        yield env.process(tp_comm.all_gather(B*S*(V // TP), dtype, [f"xpu{dev_id}-vocab_out-gather"]))
+        yield env.process(tp_comm.all_gather(B*S*V, dtype, [f"xpu{dev_id}-vocab_out-gather"]))
+
         yield env.process(dp_comm.all_reduce(G*S*V, dtype, [f"xpu_{dev_id}_loss_grad_partial"]))
+
         yield env.process(xpu.matmul_bk(1, B*S, E, (V // TP), dtype, [f"X@vocab"]))
-        yield env.process(tp_comm.all_gather(B*S*(V // TP), dtype, [f"xpu{dev_id}-bk_vocab_out-gather"]))
+        yield env.process(tp_comm.all_gather(B*S*V, dtype, [f"xpu{dev_id}-bk_vocab_out-gather"]))
         for l in range(L):
             yield env.process(bk_pass(freeze=freeze))
 
-        yield env.process(xpu.matmul_bk(1, B*S, V, E_tp, dtype, [f"X@emb"]))
-        yield env.process(tp_comm.all_gather(B*S*E_tp, dtype, [f"xpu{dev_id}-bk-embed-gather"]))
-
+        if is_text:
+            yield env.process(xpu.matmul_bk(1, B*S, V, E_tp, dtype, [f"X@emb"]))
+            #yield env.process(tp_comm.all_gather(B*S*E, dtype, [f"xpu{dev_id}-bk-embed-gather"]))
+        if is_vision:
+            yield env.process(xpu.matmul_bk(1, B*H_out*W_out, C*K*K, E_tp, dtype, ["image-embed-gen"]))
+            #yield env.process(tp_comm.all_gather(B*H_out*W_out*E, dtype,[f"img-emb-gather"]))
         yield env.process(hps.write(param_count / (DP * TP), dtype, [f"xpu{dev_id}_wt_ckpt"]))
         yield env.process(hps.write(3 * param_count / (DP * TP), Dtypes.FP32, [f"xpu{dev_id}_opt_ckpt"]))
 
@@ -142,4 +176,4 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
             if v > 0:
                 print(k, v)
 
-    yield AllOf(env, [start_delayed(env, tformer(i, L=96), i+1) for i in range(1*1)])
+    yield AllOf(env, [start_delayed(env, tformer(i, L=L), i+1) for i in range(1*1)])
