@@ -131,26 +131,27 @@ def dump_perfetto(component_types, component_mat, data):
         count = 0
         evts, cevts = get_timeout_evts(data)
         for (evt_type, timestamp, evt) in evts:
-            thread_uuid = uuids[evt.cid]
-            evt_name = "_".join(evt.name)
-            tpkt, tevt = tpkt_tevt()
-            tevt.track_uuid = thread_uuid
-            tevt.name = evt_name
-            tevt.type = trace_pb2.TrackEvent.Type.TYPE_SLICE_BEGIN if evt_type == "BEGIN" else trace_pb2.TrackEvent.Type.TYPE_SLICE_END
-            tpkt.timestamp = timestamp
-            tpkt.track_event.CopyFrom(tevt)
-            pkts.append(tpkt)
+            if evt.tid == 0 or evt.cty == ComponentType.CCL or evt.cty == ComponentType.HPS:
+                thread_uuid = uuids[evt.cid]
+                evt_name = "_".join(evt.name)
+                tpkt, tevt = tpkt_tevt()
+                tevt.track_uuid = thread_uuid
+                tevt.name = evt_name
+                tevt.type = trace_pb2.TrackEvent.Type.TYPE_SLICE_BEGIN if evt_type == "BEGIN" else trace_pb2.TrackEvent.Type.TYPE_SLICE_END
+                tpkt.timestamp = timestamp
+                tpkt.track_event.CopyFrom(tevt)
+                pkts.append(tpkt)
         for (now, evt) in cevts:
-            thread_uuid = uuids[evt.cid]
-            tpkt, tevt = tpkt_tevt()
-            tevt.track_uuid = thread_uuid
-            tevt.type = trace_pb2.TrackEvent.Type.TYPE_COUNTER
-            tevt.double_counter_value = evt.count
-            tpkt.timestamp = now
-            tpkt.track_event.CopyFrom(tevt)
-            pkts.append(tpkt)
+            if evt.tid == 0:
+                thread_uuid = uuids[evt.cid]
+                tpkt, tevt = tpkt_tevt()
+                tevt.track_uuid = thread_uuid
+                tevt.type = trace_pb2.TrackEvent.Type.TYPE_COUNTER
+                tevt.double_counter_value = evt.count
+                tpkt.timestamp = now
+                tpkt.track_event.CopyFrom(tevt)
+                pkts.append(tpkt)
 
-    print("cid:", get_cid())
     trace = trace_pb2.Trace()
     track_uuids = track_descriptors(component_types, component_mat, trace.packet)
     track_events(trace.packet, track_uuids, data)

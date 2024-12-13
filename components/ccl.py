@@ -78,9 +78,10 @@ class Ccl:
             yield self.env.timeout(comm_time, value=self.evt_data(op + ["comm"]))
             yield self.tokens.get(1)
             yield self.env.timeout(1, value=self.evt_data(op + ["complete"]))
-            # break
+                #     break
                 # else:
-                #     yield self.env.timeout(1000, value=None)
+                #     print("Waiting?", self.tokens.level, self.tokens.capacity, op)
+                #     yield self.env.timeout(100, value=None)
         else:
             raise Exception(Ccl.oot_msg)
 

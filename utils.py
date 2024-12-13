@@ -34,6 +34,7 @@ class EventData:
 class CounterData:
     count: float
     cid: int
+    tid: int
 
 class Dtypes(Enum):
     FP32 = 1
@@ -50,3 +51,36 @@ class Dtypes(Enum):
             case Dtypes.FP8:
                 out = 1
         return out
+
+def calc_conv_out_dim(dim, padding, dilation, kernel_size, stride):
+    """https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html"""
+    res = (dim + (2 * padding) - dilation * (kernel_size - 1) - 1) // stride
+    return res + 1
+
+@dataclass
+class VisionSpecs:
+    H: int
+    W: int
+    P: int
+    C: int
+
+@dataclass
+class ModelSpecs:
+    G: int
+    S: int
+    E: int
+    H: int
+    V: int
+    L: int
+    is_train: bool
+    freeze: bool
+    vision: VisionSpecs
+    param_dtype: Dtypes
+
+@dataclass
+class ClusterSpecs:
+    TP: int
+    DP: int
+    scale_up: int
+    scale_out: int
+    HB: int

@@ -115,7 +115,7 @@ class Xpu:
         if (self.memory.level + size_in_bytes) < self.memory.capacity:
             yield self.memory.put(size_in_bytes)
             yield self.env.timeout(1, value=self.evt_data(op + ["mem_fill"]))
-            yield self.env.timeout(1, value=CounterData(self.memory.level / self.memory.capacity, self.mem_cap_cid))
+            yield self.env.timeout(1, value=CounterData(self.memory.level / self.memory.capacity, self.mem_cap_cid, self.dev_id))
         else:
             raise Exception(Xpu.oom_msg(size_in_bytes, self.memory.capacity - self.memory.level))
 
@@ -123,7 +123,7 @@ class Xpu:
         size_in_bytes = size * dtype.byte_size()
         op_name = "_".join(op)
         if self.mem_contents.get(op_name, None) is None:
-            raise Exception(f"This should not happen", op_name)
+            raise Exception(f"mem_free before alloc", op_name)
         else:
             self.mem_contents[op_name] -= 1
         if (self.memory.level - size_in_bytes) >= 0:
