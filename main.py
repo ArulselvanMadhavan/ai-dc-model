@@ -19,14 +19,15 @@ if __name__ == "__main__":
     trace(env, monitor)
 
     a100_specs = XpuSpecs((312000, 0.47), (1935, 0.7), (80, 0.85))
-    # opt175b = ModelSpecs(1000, 2048, 12288, 4*12288, 50272, 96, True, False, None, Dtypes.FP16)
-    # vit_h14 = ModelSpecs(25000, 1, 1280, 4*1280, 1000, 32, True, False, VisionSpecs(224, 224, 14, 3), Dtypes.FP16)
-    llama_vit = ModelSpecs(100, 1, 1280, 4*1280, 128256, 40, True, False, VisionSpecs(224, 224, 14, 3), Dtypes.FP16)
-    llama_text = ModelSpecs(100, 8192, 8192, 3.5*8192, 128256, 80, True, True, None, Dtypes.FP16)
     cluster_specs = ClusterSpecs(8, 8, 600*GIGA, 100*GIGA, 8)
     xpu_specs = a100_specs
-    model_specs = llama_vit
+    opt175b = ModelSpecs(1000, 2048, 12288, 4*12288, 50272, 1, True, False, None, Dtypes.FP16)
+    model_specs = opt175b
     # env.process(vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs))
+
+    vit_h14 = ModelSpecs(25000, 1, 1280, 4*1280, 1000, 32, True, False, VisionSpecs(224, 224, 14, 3), Dtypes.FP16)
+    llama_vit = ModelSpecs(100, 1, 1280, 4*1280, 128256, 40, True, False, VisionSpecs(224, 224, 14, 3), Dtypes.FP16)
+    llama_text = ModelSpecs(100, 8192, 8192, 3.5*8192, 128256, 80, True, True, None, Dtypes.FP16)
     env.process(llama_im_txt_train(env, xpu_specs, llama_vit, llama_text, cluster_specs))
     env.run()
     total_xpus = 1*1

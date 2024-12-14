@@ -9,25 +9,7 @@ from utils import *
 from simpy.events import AllOf
 from simpy.util import start_delayed
 from dataclasses import dataclass
-
-
-def load_qkv_ffns(env, L, E, E_tp, freeze, is_train, dtype, xpu, op):
-    def add_opt_states(p, i, l):
-        return [(xpu.mem_fill(p, Dtypes.FP32, op+[f"{k}_{i}_{l}"]))
-                for k in ["momentum", "variance", "param"]]
-    qkvs = []
-    ffns = []
-    for l in range(L):
-        QKVs = ["Q", "K", "V"]
-        qkvs = qkvs + [(xpu.mem_fill(E*E_tp, dtype, op+[f"W_{i}_{l}"])) for i in QKVs]
-        FFNs = ["ffn1", "ffn2"]
-        ffns = ffns + [(xpu.mem_fill(E*4*E_tp, dtype, op+[f"W_{i}_{l}"])) for i in FFNs]
-        if is_train and freeze is False:
-            os = [p for i in QKVs for p in add_opt_states(E*E_tp, i, l)]
-            qkvs = qkvs + os
-            os = [p for i in FFNs for p in add_opt_states(E*4*E_tp, i, l)]
-            ffns = ffns + os
-    return qkvs + ffns
+from models.tformer import embed_fwd, fwd_pass, load_qkv_ffns
 
 def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_specs):
     TP = cluster_specs.TP
@@ -42,6 +24,7 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
     is_train = im_model_specs.is_train
     dev_id = 0
     xpu = Xpu(env, xpu_specs, dev_id)
+    tp_comm = tp_comms[dev_id // DP]
     def im_model_run(model_specs):
         vision_specs = model_specs.vision
         H_out = calc_conv_out_dim(vision_specs.H, 0, 1, vision_specs.P, vision_specs.P)
@@ -54,6 +37,7 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         S = model_specs.S
         E = model_specs.E
         H = model_specs.H
+        H_tp = H // TP
         E_tp = model_specs.E // TP
         V = model_specs.V
         L = model_specs.L
@@ -64,9 +48,8 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         freeze = model_specs.freeze
         print("im-model params:", (param_count * L + (6*E*E*6))/GIGA)
         kload = xpu.mem_fill(E_tp * vision_specs.C * vision_specs.P * vision_specs.P, dtype, ["conv_kernel_load"])
-        qkv_ffns = load_qkv_ffns(env, L, E, E_tp, freeze, is_train, dtype, xpu, ["im"])
+        qkv_ffns = load_qkv_ffns(env, L, E, E_tp, H_tp, False, freeze, is_train, dtype, xpu, ["im"])
         return [kload] + qkv_ffns
-        #yield AllOf(env, [kload, qkv_ffns])
 
     def txt_model_run(model_specs):
         G = model_specs.G
@@ -75,6 +58,7 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         E = model_specs.E
         assert E % TP == 0, "TP dim size should divide embedding dimension"
         H = model_specs.H
+        H_tp = H // TP
         E_tp = model_specs.E // TP
         V = model_specs.V
         L = model_specs.L
@@ -88,13 +72,20 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         freeze = model_specs.freeze
         print("txt-model-params:", ((param_count * L)+out_params)/GIGA)
         eload = xpu.mem_fill(V*E_tp, dtype, ["embed_load"])
-        qkv_ffns = load_qkv_ffns(env, L, E, E_tp, freeze, is_train, dtype, xpu, ["txt"])
-        return [eload] + qkv_ffns
-
-
+        qkv_ffns = load_qkv_ffns(env, L, E, E_tp, H_tp, True, freeze, is_train, dtype, xpu, ["txt"])
+        loads = [eload] + qkv_ffns
+        vocab_load = xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"])
+        yield loads + [vocab_load]
+        yield embed_fwd(env, B, S, E, V, E_tp, dtype, freeze, dev_id, tp_comm, xpu)
+        for l in range(L):
+            if l % 4 == 0:
+                yield fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, freeze, dev_id, tp_comm, xpu, ckpt=False)
+            else:
+                yield fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, freeze, dev_id, tp_comm, xpu, ckpt=False)
     im_model_load = im_model_run(im_model_specs)
-    txt_model_load = txt_model_run(txt_model_specs)
-    from typing import Generator
+    txt_model_gen = txt_model_run(txt_model_specs)
+    txt_model_load = next(txt_model_gen)
+    print("TML:", len(txt_model_load))
     all_loads = im_model_load + txt_model_load
     chunk_size = 10
     chunk = []
@@ -103,7 +94,10 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         if i % chunk_size == 0:
             yield AllOf(env, [env.process(c) for c in chunk])
             chunk = []
-            print("mem:", i, xpu.mem_rem())
+    yield AllOf(env, [env.process(c) for c in chunk])
+    yield env.process(next(txt_model_gen)) # embed_fwd
+    for l in range(txt_model_specs.L):
+        yield env.process(next(txt_model_gen))
     # yield AllOf(env, [env.process(ll) for ll in im_model_load])
     # print(xpu.mem_rem())
     # yield AllOf(env, all_loads)

@@ -41,12 +41,24 @@ class Xpu:
         wr_size = b * m * p
         if ckpt:
             yield self.env.process(self.mem_fill(wr_size, dtype, op))
-
         is_read = True
         rd_size = b * m * n + b * n * p
         mem_rd = self.env.process(self.mem_access(rd_size, is_read, dtype, op))
         macs = b * m * n * p
         comp_proc = self.env.process(self.compute(macs*2, dtype, op))
+        is_read = False
+        mem_wr = self.env.process(self.mem_access(wr_size, is_read, dtype, op))
+        yield AllOf(self.env, [mem_rd, comp_proc, mem_wr])
+
+    def elem_mul(self, elems, dtype, op):
+        wr_size = elems
+        if ckpt:
+            yield self.env.process(self.mem_fill(wr_size, dtype, op))
+        is_read = True
+        rd_size = 2 * elems
+        mem_rd = self.env.proces(self.mem_access(rd_size, is_read, dtype, op))
+        macs = elems
+        comp_proc = self.env.process(self.compute(macs, dtype, op))
         is_read = False
         mem_wr = self.env.process(self.mem_access(wr_size, is_read, dtype, op))
         yield AllOf(self.env, [mem_rd, comp_proc, mem_wr])
