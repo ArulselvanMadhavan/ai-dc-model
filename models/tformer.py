@@ -10,21 +10,22 @@ from simpy.events import AllOf
 from simpy.util import start_delayed
 from dataclasses import dataclass
 
-def load_qkv_ffns(env, L, E, E_tp, H_tp, is_llama_ffn, freeze, is_train, dtype, xpu, op):
+def load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads, is_llama_ffn, freeze, is_train, dtype, xpu, op):
     def add_opt_states(p, i, l):
         return [(xpu.mem_fill(p, Dtypes.FP32, op+[f"{k}_{i}_{l}"]))
                 for k in ["momentum", "variance", "param"]]
     qkvs = []
     ffns = []
     for l in range(L):
-        QKVs = ["Q", "K", "V"]
-        qkvs = qkvs + [(xpu.mem_fill(E*E_tp, dtype, op+[f"W_{i}_{l}"])) for i in QKVs]
+        qkvs = qkvs + [(xpu.mem_fill(E*E_tp, dtype, op+[f"W_{i}_{l}"])) for i in ["Q"]]
+        qkvs = qkvs + [(xpu.mem_fill(int(E*E_tp * kv_heads/num_heads), dtype, op+[f"W_{i}_{l}"])) for i in ["K", "V"]]
         FFNs = ["ffn1", "ffn2", "ffn3"] if is_llama_ffn else ["ffn1", "ffn2"]
         ffns = ffns + [(xpu.mem_fill(E*H_tp, dtype, op+[f"W_{i}_{l}"])) for i in FFNs]
         if is_train and freeze is False:
-            os = [p for i in QKVs for p in add_opt_states(E*E_tp, i, l)]
+            os = [p for i in ["Q"] for p in add_opt_states(E*E_tp, i, l)]
             qkvs = qkvs + os
-            os = [p for i in FFNs for p in add_opt_states(E*4*E_tp, i, l)]
+            os = [p for i in ["K", "V"] for p in add_opt_states(int(E*E_tp*kv_heads/num_heads), i, l)]
+            os = [p for i in FFNs for p in add_opt_states(E*H_tp, i, l)]
             ffns = ffns + os
     return qkvs + ffns
 
@@ -37,19 +38,22 @@ def img_emb_fwd(env, B, H_out, W_out, C, K, E, E_tp, dtype, freeze, dev_id, tp_c
     yield env.process(xpu.matmul(1, B*H_out*W_out, C*K*K, E_tp, dtype, not freeze, ["img-emb-gen"]))
     yield env.process(tp_comm.all_gather(B*H_out*W_out*E, dtype,[f"img-emb-gather"]))
 
-def fwd_pass(env, B, S, E, V, E_tp, H, dtype, is_llama_mlp, freeze, dev_id, tp_comm, xpu, ckpt, op):
+def fwd_pass(env, B, S, E, V, E_tp, H, dtype, num_heads, kv_heads, is_llama_mlp, freeze, dev_id, tp_comm, xpu, ckpt, op):
     yield env.process(xpu.mem_fill(B*S*E_tp, dtype, op + [f"xpu_{dev_id}-act-ckpt"]))
-    QKVs = ["Q", "K", "V"]
-    for i in QKVs:
+    for i in ["Q"]:
         yield env.process(xpu.matmul(1, B*S, E, E_tp, dtype, ckpt, op + [f"X@W_{i}"]))
-    yield env.process(xpu.matmul(B, S, E_tp, S, dtype, ckpt, op + [f"Q@K^T"]))
-    yield env.process(xpu.matmul(B, S, S, E_tp, dtype, ckpt, op + [f"A@V^T"]))
+    g = num_heads / kv_heads
+    assert E_tp % g == 0
+    for i in ["K", "V"]:
+        yield env.process(xpu.matmul(1, B*S, E, E_tp / g, dtype, ckpt, op + [f"X@W_{i}"]))
+    yield env.process(xpu.matmul(B, g*S, E_tp/g, S, dtype, ckpt, op + [f"Q@K^T"]))
+    yield env.process(xpu.matmul(B, g*S, S, E_tp/g, dtype, ckpt, op + [f"A@V^T"]))
     yield env.process(xpu.matmul(1, B*S, E_tp, E, dtype, ckpt, op + [f"out_proj"]))
     yield env.process(tp_comm.all_reduce(B*S*E, dtype, op + [f"xpu{dev_id}-attn_partial"]))
     yield env.process(xpu.matmul(1, B*S, E, H, dtype, ckpt, op + [f"ffn1"]))
-    if llama_mlp:
+    if is_llama_mlp:
         yield env.process(xpu.matmul(1, B*S, E, H, dtype, ckpt, op + [f"gate_ffn"]))
-        yield env.process(xpu.elem_mul(1, B*S*H, dtype, ckpt, op + [f"elem_mul"]))
+        yield env.process(xpu.elem_mul(B*S*H, dtype, ckpt, op + [f"elem_mul"]))
     yield env.process(xpu.matmul(1, B*S, H, E, dtype, ckpt, op + [f"ffn2"]))
     yield env.process(tp_comm.all_reduce(B*S*E, dtype, op + [f"xpu{dev_id}-ffn_partial"]))
     if ckpt is False:
@@ -81,6 +85,8 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     freeze = model_specs.freeze
     is_vision = model_specs.vision is not None
     is_text = not is_vision
+    num_heads = model_specs.num_heads
+    kv_heads = model_specs.kv_heads
     if is_vision:
         vision_specs = model_specs.vision
         H_out = calc_conv_out_dim(vision_specs.H, 0, 1, vision_specs.P, vision_specs.P)
@@ -103,26 +109,14 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         elif is_vision:
             yield env.process(xpu.mem_fill(E_tp * vision_specs.C * vision_specs.P * vision_specs.P, dtype, ["conv_kernel_load"]))
 
-        qkv_ffns = load_qkv_ffns(env, L, E, E_tp, H_tp, False, freeze, is_train, dtype, xpu, ["im"])
-        # for l in range(L):
-        #     QKVs = ["Q", "K", "V"]
-        #     qkvs = qkvs + [env.process(xpu.mem_fill(E*E_tp, dtype, [f"W_{i}"])) for i in QKVs]
-        #     FFNs = ["ffn1", "ffn2"]
-        #     ffns = ffns + [env.process(xpu.mem_fill(E*H_tp, dtype, [f"W_{i}"])) for i in FFNs]
-        #     if is_train and freeze is False:
-        #         os = [p for i in QKVs for p in add_opt_states(E*E_tp, i, l)]
-        #         qkvs = qkvs + os
-        #         os = [p for i in FFNs for p in add_opt_states(E*H_tp, i, l)]
-        #         ffns = ffns + os
-        # yield AllOf(env, qkvs + ffns)
+        qkv_ffns = load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads,
+                                 False, freeze, is_train, dtype, xpu, ["im"])
         yield AllOf(env, [env.process(l) for l in qkv_ffns])
         if is_text:
             yield env.process(xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"]))
             yield env.process(embed_fwd(env, B, S, E, V, E_tp, dtype, freeze, dev_id, tp_comm, xpu))
         elif is_vision:
             yield env.process(img_emb_fwd(env, B, H_out, W_out, C, K, E, E_tp, dtype, freeze, dev_id, tp_comm, xpu))
-            # yield env.process(xpu.matmul(1, B*H_out*W_out, C*K*K, E_tp, dtype, not freeze, ["image-embed-gen"]))
-            # yield env.process(tp_comm.all_gather(B*H_out*W_out*E, dtype,[f"img-emb-gather"]))
 
         def bk_pass(freeze):
             QKVs = ["Q", "K", "V"]
@@ -140,7 +134,9 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
                     yield env.process(xpu.matmul(1, B*S, E, E_tp, dtype, ckpt, [f"X@W_{i}"]))
                 yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-attn_ip_grad"]))
             else:
-                yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, False, freeze, dev_id, tp_comm, xpu, ckpt=True, op=[]))
+                yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype,
+                                           num_heads, kv_heads, False, freeze, dev_id,
+                                           tp_comm, xpu, ckpt=True, op=[]))
                 yield env.process(xpu.matmul_bk(1, B*S, H_tp, E, dtype, [f"ffn2"]))
                 yield env.process(xpu.matmul_bk(1, B*S, E, H_tp, dtype, [f"ffn1"]))
                 yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-ffn_grad"]))
@@ -155,7 +151,9 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         # Train
         for l in range(L):
             print(f"Training layer-{l}")
-            yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, False, freeze, dev_id, tp_comm, xpu, ckpt=False, op=[]))
+            yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype,
+                                       num_heads, kv_heads, False, freeze,
+                                       dev_id, tp_comm, xpu, ckpt=False, op=[]))
         yield env.process(xpu.matmul(1, B*S, E, (V // TP), dtype, True, [f"X@vocab"]))
         yield env.process(tp_comm.all_gather(B*S*V, dtype, [f"xpu{dev_id}-vocab_out-gather"]))
 
