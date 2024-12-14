@@ -37,7 +37,7 @@ def img_emb_fwd(env, B, H_out, W_out, C, K, E, E_tp, dtype, freeze, dev_id, tp_c
     yield env.process(xpu.matmul(1, B*H_out*W_out, C*K*K, E_tp, dtype, not freeze, ["img-emb-gen"]))
     yield env.process(tp_comm.all_gather(B*H_out*W_out*E, dtype,[f"img-emb-gather"]))
 
-def fwd_pass(env, B, S, E, V, E_tp, H, dtype, freeze, dev_id, tp_comm, xpu, ckpt, op):
+def fwd_pass(env, B, S, E, V, E_tp, H, dtype, is_llama_mlp, freeze, dev_id, tp_comm, xpu, ckpt, op):
     yield env.process(xpu.mem_fill(B*S*E_tp, dtype, op + [f"xpu_{dev_id}-act-ckpt"]))
     QKVs = ["Q", "K", "V"]
     for i in QKVs:
@@ -47,6 +47,9 @@ def fwd_pass(env, B, S, E, V, E_tp, H, dtype, freeze, dev_id, tp_comm, xpu, ckpt
     yield env.process(xpu.matmul(1, B*S, E_tp, E, dtype, ckpt, op + [f"out_proj"]))
     yield env.process(tp_comm.all_reduce(B*S*E, dtype, op + [f"xpu{dev_id}-attn_partial"]))
     yield env.process(xpu.matmul(1, B*S, E, H, dtype, ckpt, op + [f"ffn1"]))
+    if llama_mlp:
+        yield env.process(xpu.matmul(1, B*S, E, H, dtype, ckpt, op + [f"gate_ffn"]))
+        yield env.process(xpu.elem_mul(1, B*S*H, dtype, ckpt, op + [f"elem_mul"]))
     yield env.process(xpu.matmul(1, B*S, H, E, dtype, ckpt, op + [f"ffn2"]))
     yield env.process(tp_comm.all_reduce(B*S*E, dtype, op + [f"xpu{dev_id}-ffn_partial"]))
     if ckpt is False:
@@ -137,7 +140,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
                     yield env.process(xpu.matmul(1, B*S, E, E_tp, dtype, ckpt, [f"X@W_{i}"]))
                 yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-attn_ip_grad"]))
             else:
-                yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, freeze, dev_id, tp_comm, xpu, ckpt=True, op=[]))
+                yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, False, freeze, dev_id, tp_comm, xpu, ckpt=True, op=[]))
                 yield env.process(xpu.matmul_bk(1, B*S, H_tp, E, dtype, [f"ffn2"]))
                 yield env.process(xpu.matmul_bk(1, B*S, E, H_tp, dtype, [f"ffn1"]))
                 yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-ffn_grad"]))
@@ -152,7 +155,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         # Train
         for l in range(L):
             print(f"Training layer-{l}")
-            yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, freeze, dev_id, tp_comm, xpu, ckpt=False, op=[]))
+            yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, False, freeze, dev_id, tp_comm, xpu, ckpt=False, op=[]))
         yield env.process(xpu.matmul(1, B*S, E, (V // TP), dtype, True, [f"X@vocab"]))
         yield env.process(tp_comm.all_gather(B*S*V, dtype, [f"xpu{dev_id}-vocab_out-gather"]))
 

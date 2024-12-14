@@ -76,6 +76,8 @@ class ModelSpecs:
     freeze: bool
     vision: VisionSpecs
     param_dtype: Dtypes
+    kv_heads: int
+    num_heads: int
 
 @dataclass
 class ClusterSpecs:

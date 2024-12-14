@@ -46,7 +46,7 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         param_count = 4*E*E + 4*E + 2*E*H + E + H if has_bias else 4*E*E + 2*E*H
         assert E % TP == 0, "TP dim size should divide embedding dimension"
         freeze = model_specs.freeze
-        print("im-model params:", (param_count * L + (6*E*E*6))/GIGA)
+        print("im-model params:", (param_count * L + (6*E*8192))/GIGA)
         kload = xpu.mem_fill(E_tp * vision_specs.C * vision_specs.P * vision_specs.P, dtype, ["conv_kernel_load"])
         qkv_ffns = load_qkv_ffns(env, L, E, E_tp, H_tp, False, freeze, is_train, dtype, xpu, ["im"])
         out_proj = xpu.mem_fill(LF*E_tp*LF*E_tp, dtype, ["im-out-proj"])
@@ -54,7 +54,7 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         def img_fwd():
             yield env.process(img_emb_fwd(env, B, H_out, W_out, C, K, E, E_tp, dtype, False, dev_id, tp_comm, xpu))
             for i in range(L):
-                yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, False, dev_id, tp_comm, xpu, ckpt=False, op=["im"]))
+                yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, False, False, dev_id, tp_comm, xpu, ckpt=False, op=["im"]))
             yield env.process(xpu.matmul(1, B*S, 6*E_tp, 6*E_tp, dtype, True, [f"im-multilayer-proj"]))
             yield env.process(tp_comm.all_reduce(B*S*LF*E, dtype, [f"xpu{dev_id}-im-partial"]))
         for i in range(20):
@@ -71,15 +71,17 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         E_tp = model_specs.E // TP
         V = model_specs.V
         L = model_specs.L
+        num_heads = model_specs.num_heads
+        kv_heads = model_specs.kv_heads
         bws = [cluster_specs.scale_up, cluster_specs.scale_out]
         bw_eff = [0.7, 0.7]
         dtype = Dtypes.FP16
         is_train = model_specs.is_train
         has_bias = False
-        param_count = 4*E*E + 4*E + 3*E*H + E + H if has_bias else 4*E*E + 3*E*H
+        param_count = 4*E*E + 4*E + 3*E*H + E + H if has_bias else 2*E*E + 2*E*E*(kv_heads/num_heads) + 3*E*H
         out_params = 2 * E * V
         freeze = model_specs.freeze
-        print("txt-model-params:", ((param_count * L)+out_params)/GIGA)
+        print("txt-model-params:", ((param_count * L) + out_params)/GIGA)
         eload = xpu.mem_fill(V*E_tp, dtype, ["embed_load"])
         qkv_ffns = load_qkv_ffns(env, L, E, E_tp, H_tp, True, freeze, is_train, dtype, xpu, ["txt"])
         loads = [eload] + qkv_ffns
@@ -88,10 +90,9 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         yield embed_fwd(env, B, S, E, V, E_tp, dtype, freeze, dev_id, tp_comm, xpu)
         for l in range(1, L+1):
             if l % 4 == 0:
-                # cross attn fwd pass - run fwd to generate img tokens
-                yield fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, freeze, dev_id, tp_comm, xpu, ckpt=False, op=[])
+                yield fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, True, freeze, dev_id, tp_comm, xpu, ckpt=False, op=[])
             else:
-                yield fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, freeze, dev_id, tp_comm, xpu, ckpt=False, op=["txt"])
+                yield fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, True, freeze, dev_id, tp_comm, xpu, ckpt=False, op=["txt"])
     im_model_gen = im_model_run(im_model_specs)
     txt_model_gen = txt_model_run(txt_model_specs)
     im_model_load = next(im_model_gen)
