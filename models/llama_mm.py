@@ -9,7 +9,7 @@ from utils import *
 from simpy.events import AllOf
 from simpy.util import start_delayed
 from dataclasses import dataclass
-from models.tformer import embed_fwd, fwd_pass, load_qkv_ffns
+from models.tformer import embed_fwd, fwd_pass, load_qkv_ffns, img_emb_fwd
 
 def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_specs):
     TP = cluster_specs.TP
@@ -34,7 +34,6 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         K = vision_specs.P
         G = model_specs.G
         B = G // DP
-        S = model_specs.S
         E = model_specs.E
         H = model_specs.H
         H_tp = H // TP
@@ -43,13 +42,23 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         L = model_specs.L
         dtype = model_specs.param_dtype
         freeze = model_specs.freeze
+        LF = 6
         param_count = 4*E*E + 4*E + 2*E*H + E + H if has_bias else 4*E*E + 2*E*H
         assert E % TP == 0, "TP dim size should divide embedding dimension"
         freeze = model_specs.freeze
         print("im-model params:", (param_count * L + (6*E*E*6))/GIGA)
         kload = xpu.mem_fill(E_tp * vision_specs.C * vision_specs.P * vision_specs.P, dtype, ["conv_kernel_load"])
         qkv_ffns = load_qkv_ffns(env, L, E, E_tp, H_tp, False, freeze, is_train, dtype, xpu, ["im"])
-        return [kload] + qkv_ffns
+        out_proj = xpu.mem_fill(LF*E_tp*LF*E_tp, dtype, ["im-out-proj"])
+        yield [kload] + qkv_ffns + [out_proj]
+        def img_fwd():
+            yield env.process(img_emb_fwd(env, B, H_out, W_out, C, K, E, E_tp, dtype, False, dev_id, tp_comm, xpu))
+            for i in range(L):
+                yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, False, dev_id, tp_comm, xpu, ckpt=False, op=["im"]))
+            yield env.process(xpu.matmul(1, B*S, 6*E_tp, 6*E_tp, dtype, True, [f"im-multilayer-proj"]))
+            yield env.process(tp_comm.all_reduce(B*S*LF*E, dtype, [f"xpu{dev_id}-im-partial"]))
+        for i in range(20):
+            yield img_fwd()
 
     def txt_model_run(model_specs):
         G = model_specs.G
@@ -77,15 +86,17 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         vocab_load = xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"])
         yield loads + [vocab_load]
         yield embed_fwd(env, B, S, E, V, E_tp, dtype, freeze, dev_id, tp_comm, xpu)
-        for l in range(L):
+        for l in range(1, L+1):
             if l % 4 == 0:
-                yield fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, freeze, dev_id, tp_comm, xpu, ckpt=False)
+                # cross attn fwd pass - run fwd to generate img tokens
+                yield fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, freeze, dev_id, tp_comm, xpu, ckpt=False, op=[])
             else:
-                yield fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, freeze, dev_id, tp_comm, xpu, ckpt=False)
-    im_model_load = im_model_run(im_model_specs)
+                yield fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, freeze, dev_id, tp_comm, xpu, ckpt=False, op=["txt"])
+    im_model_gen = im_model_run(im_model_specs)
     txt_model_gen = txt_model_run(txt_model_specs)
+    im_model_load = next(im_model_gen)
     txt_model_load = next(txt_model_gen)
-    print("TML:", len(txt_model_load))
+    print("TML:", len(im_model_load), len(txt_model_load))
     all_loads = im_model_load + txt_model_load
     chunk_size = 10
     chunk = []
@@ -96,8 +107,11 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
             chunk = []
     yield AllOf(env, [env.process(c) for c in chunk])
     yield env.process(next(txt_model_gen)) # embed_fwd
-    for l in range(txt_model_specs.L):
+    for l in range(1, txt_model_specs.L+1):
+        if l % 4 == 0:
+            yield env.process(next(im_model_gen))
         yield env.process(next(txt_model_gen))
+    print(xpu.mem_rem())
     # yield AllOf(env, [env.process(ll) for ll in im_model_load])
     # print(xpu.mem_rem())
     # yield AllOf(env, all_loads)

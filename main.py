@@ -26,7 +26,7 @@ if __name__ == "__main__":
     # env.process(vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs))
 
     vit_h14 = ModelSpecs(25000, 1, 1280, 4*1280, 1000, 32, True, False, VisionSpecs(224, 224, 14, 3), Dtypes.FP16)
-    llama_vit = ModelSpecs(100, 1, 1280, 4*1280, 128256, 40, True, False, VisionSpecs(224, 224, 14, 3), Dtypes.FP16)
+    llama_vit = ModelSpecs(1000, 1, 1280, 4*1280, 128256, 40, True, False, VisionSpecs(224, 224, 14, 3), Dtypes.FP16)
     llama_text = ModelSpecs(100, 8192, 8192, 3.5*8192, 128256, 80, True, True, None, Dtypes.FP16)
     env.process(llama_im_txt_train(env, xpu_specs, llama_vit, llama_text, cluster_specs))
     env.run()
