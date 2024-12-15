@@ -137,6 +137,8 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     is_text = not is_vision
     num_heads = model_specs.num_heads
     kv_heads = model_specs.kv_heads
+    is_llama_mlp = model_specs.is_llama_mlp
+
     if is_vision:
         vision_specs = model_specs.vision
         H_out = calc_conv_out_dim(vision_specs.H, 0, 1, vision_specs.P, vision_specs.P)
@@ -160,7 +162,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
             yield env.process(xpu.mem_fill(E_tp * vision_specs.C * vision_specs.P * vision_specs.P, dtype, ["conv_kernel_load"]))
 
         qkv_ffns = load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads,
-                                 False, freeze, is_train, dtype, xpu, ["im"])
+                                 is_llama_mlp, freeze, is_train, dtype, xpu, ["im"])
         yield AllOf(env, [env.process(l) for l in qkv_ffns])
         if is_text:
             yield env.process(xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"]))
@@ -172,7 +174,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         for l in range(L):
             print(f"Training layer-{l}")
             yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype,
-                                       num_heads, kv_heads, False, freeze,
+                                       num_heads, kv_heads, is_llama_mlp, freeze,
                                        dev_id, tp_comm, xpu, ckpt=False, op=[]))
 
 # loss_gradient(env, G, B, S, E, V, TP, dtype, tp_comm, dp_comm, xpu, dev_id):

@@ -78,6 +78,7 @@ class ModelSpecs:
     param_dtype: Dtypes
     kv_heads: int
     num_heads: int
+    is_llama_mlp: bool
 
 @dataclass
 class ClusterSpecs:
