@@ -28,7 +28,7 @@ if __name__ == "__main__":
     vit_h14 = ModelSpecs(25000, 1, 1280, 4*1280, 1000, 32, True, False, VisionSpecs(224, 224, 14, 3), Dtypes.FP16, 1, 1)
     # section 7.4 pretraining - 336x336; global 16384
     llama_vit = ModelSpecs(10000, 1, 1280, 4*1280, 128256, 40, True, False, VisionSpecs(224, 224, 14, 3), Dtypes.FP16, 1, 1)
-    llama_text = ModelSpecs(32, 8192, 8192, 3.5*8192, 128256, 80, True, True, None, Dtypes.FP16, 8, 64)
+    llama_text = ModelSpecs(32, 8192, 8192, 3.5*8192, 128256, 4, True, True, None, Dtypes.FP16, 8, 64)
     env.process(llama_im_txt_train(env, xpu_specs, llama_vit, llama_text, cluster_specs))
     env.run()
     total_xpus = 1*1
