@@ -57,11 +57,15 @@ class Xpu:
         mem_wr = self.env.process(self.mem_access(wr_size, is_read, dtype, op))
         yield AllOf(self.env, [mem_rd, comp_proc, mem_wr])
 
+    def elem_mul_bk(self, elems, dtype, op):
+        emul = self.elem_mul(elems, dtype, False, op)
+        yield self.env.process(self.mem_free(elems, dtype, op))
+
     def matmul_bk(self, b, m, n, p, g, dtype, op):
         # Assume inputs to matmul were saved
         inp = b * m * n
         out = b * m * p
-        wt_grad = b * n * (p // g)      #
+        wt_grad = b * n * (p // g)
         wt_macs = b * n * m * p
         wt_rd_size = inp + out
         is_read = True
@@ -89,11 +93,15 @@ class Xpu:
         o_upd = self.env.process(self.mem_access(3 * wt_grad, is_read, Dtypes.FP32, opt_upd))
         yield o_upd
 
+        # w_free = self.env.process(self.mem_free(wt_grad, dtype, wt_grad_op)) # Free w_grad
+        # yield w_free
+
         l_grad = b * m * n
         l_macs = b * m * p * n
         l_rd_size = b * m * p + b * p * n
         is_read = True
         l_grad_op = op + ["l_grad"]
+        #print("L_grad:", b, m, n, l_grad * 2 / GIGA)
         yield self.env.process(self.mem_fill(l_grad, dtype, l_grad_op))
         l_rd = self.env.process(self.mem_access(l_rd_size, is_read, dtype, l_grad_op))
         l_comp = self.env.process(self.compute(l_macs * 2, dtype, l_grad_op))
@@ -123,6 +131,7 @@ class Xpu:
             yield self.env.timeout(1, value=self.evt_data(op + ["mem_fill"]))
             yield self.env.timeout(1, value=CounterData(self.memory.level / self.memory.capacity, self.mem_cap_cid, self.dev_id))
         else:
+            print(self.mem_contents)
             raise Exception(Xpu.oom_msg(size_in_bytes, self.memory.capacity - self.memory.level))
 
     def mem_free(self, size, dtype, op):

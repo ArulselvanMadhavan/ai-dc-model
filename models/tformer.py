@@ -19,15 +19,15 @@ def loss_gradient(env, G, B, S, E, V, TP, dtype, tp_comm, dp_comm, xpu, dev_id):
 
 def load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads, is_llama_ffn, freeze, is_train, dtype, xpu, op):
     def add_opt_states(p, i, l):
-        return [(xpu.mem_fill(p, Dtypes.FP32, op+[f"{k}_{i}_{l}"]))
+        return [(xpu.mem_fill(p, Dtypes.FP32, op+[f"{k}_{i}"]))
                 for k in ["momentum", "variance", "param"]]
     qkvs = []
     ffns = []
     for l in range(L):
-        qkvs = qkvs + [(xpu.mem_fill(E*E_tp, dtype, op+[f"W_{i}_{l}"])) for i in ["Q"]]
-        qkvs = qkvs + [(xpu.mem_fill(int(E*E_tp * kv_heads/num_heads), dtype, op+[f"W_{i}_{l}"])) for i in ["K", "V"]]
+        qkvs = qkvs + [(xpu.mem_fill(E*E_tp, dtype, op+[f"W_{i}"])) for i in ["Q"]]
+        qkvs = qkvs + [(xpu.mem_fill(int(E*E_tp * kv_heads/num_heads), dtype, op+[f"W_{i}"])) for i in ["K", "V"]]
         FFNs = ["ffn1", "ffn2", "ffn3"] if is_llama_ffn else ["ffn1", "ffn2"]
-        ffns = ffns + [(xpu.mem_fill(E*H_tp, dtype, op+[f"W_{i}_{l}"])) for i in FFNs]
+        ffns = ffns + [(xpu.mem_fill(E*H_tp, dtype, op+[f"W_{i}"])) for i in FFNs]
         if is_train and freeze is False:
             os = [p for i in ["Q"] for p in add_opt_states(E*E_tp, i, l)]
             qkvs = qkvs + os
@@ -98,7 +98,7 @@ def bk_pass(env, B, S, E, V, E_tp, H_tp, dtype, num_heads, kv_heads,
         yield env.process(xpu.matmul_bk(1, B*S, H_tp, E, 1, dtype, op+[f"ffn2"]))
         if is_llama_mlp:
             yield env.process(xpu.matmul_bk(1, B*S, E, H_tp, 1, dtype, op + [f"gate_ffn"]))
-            yield env.process(xpu.elem_mul(B*S*H_tp, dtype, ckpt=False, op=op + [f"elem_mul"]))
+            yield env.process(xpu.elem_mul_bk(B*S*H_tp, dtype, op=op + [f"elem_mul"]))
         yield env.process(xpu.matmul_bk(1, B*S, E, H_tp, 1, dtype, op+[f"ffn1"]))
         yield env.process(tp_comm.all_reduce(B*S*E, dtype, op+[f"xpu{dev_id}-ffn_grad"]))
         yield env.process(xpu.matmul_bk(1, B*S, E_tp, E, 1, dtype, op+[f"out_proj"]))
@@ -130,7 +130,15 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     dtype = model_specs.param_dtype
     is_train = model_specs.is_train
     has_bias = False
-    param_count = 4*E*E + 4*E + 2*E*H + E + H if has_bias else 4*E*E + 2*E*H
+    num_heads = model_specs.num_heads
+    kv_heads = model_specs.kv_heads
+    is_llama_mlp = model_specs.is_llama_mlp
+    attn_params = 2*E*E + 2*E*E*(kv_heads/num_heads)
+    mlp_params = 3 * E * H if is_llama_mlp else 2 * E * H
+    out_params = 2 * E * V
+    param_count = attn_params + 4*E + mlp_params + E + H if has_bias else attn_params + mlp_params
+    total_params = (param_count * L) + out_params
+    print("Total params:", total_params/GIGA)
     HB = cluster_specs.HB
     tp_comms = [Ccl(env, [HB, TP//HB], bws, bw_eff) for i in range(DP)]
     dp_comm = Ccl(env, [TP, DP], bws, bw_eff)
@@ -138,9 +146,6 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     freeze = model_specs.freeze
     is_vision = model_specs.vision is not None
     is_text = not is_vision
-    num_heads = model_specs.num_heads
-    kv_heads = model_specs.kv_heads
-    is_llama_mlp = model_specs.is_llama_mlp
 
     if is_vision:
         vision_specs = model_specs.vision
@@ -160,12 +165,12 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         xpu = Xpu(env, xpu_specs, dev_id) # Every xpu takes up two cids
         # Weight load
         if is_text:
-            yield env.process(xpu.mem_fill(V*E_tp, dtype, ["embed_load"]))
+            yield env.process(xpu.mem_fill((V//TP)*E, dtype, ["embed_load"]))
         elif is_vision:
             yield env.process(xpu.mem_fill(E_tp * vision_specs.C * vision_specs.P * vision_specs.P, dtype, ["conv_kernel_load"]))
 
         qkv_ffns = load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads,
-                                 is_llama_mlp, freeze, is_train, dtype, xpu, ["im"])
+                                 is_llama_mlp, freeze, is_train, dtype, xpu, [])
         yield AllOf(env, [env.process(l) for l in qkv_ffns])
         if is_text:
             yield env.process(xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"]))
@@ -189,11 +194,12 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
                                       tp_comm, xpu, op=[]))
 
         if is_text and (not freeze):
-            yield env.process(xpu.matmul_bk(1, B*S, V, E_tp, 1, dtype, [f"X@emb"]))
-            #yield env.process(tp_comm.all_gather(B*S*E, dtype, [f"xpu{dev_id}-bk-embed-gather"]))
+            # all-scatter
+            yield env.process(tp_comm.all_gather(B*S*E, dtype, [f"xpu{dev_id}-bk-embed-gather"]))
+            yield env.process(xpu.matmul_bk(1, B*S, (V//TP), E, 1, dtype, [f"X@emb"]))
         if is_vision and (not freeze):
+            yield env.process(tp_comm.all_gather(B*H_out*W_out*E, dtype,[f"img-emb-gather"]))
             yield env.process(xpu.matmul_bk(1, B*H_out*W_out, C*K*K, E_tp, 1, dtype, ["image-embed-gen"]))
-            #yield env.process(tp_comm.all_gather(B*H_out*W_out*E, dtype,[f"img-emb-gather"]))
         yield env.process(hps.write(param_count / (DP * TP), dtype, [f"xpu{dev_id}_wt_ckpt"]))
         yield env.process(hps.write(3 * param_count / (DP * TP), Dtypes.FP32, [f"xpu{dev_id}_opt_ckpt"]))
 

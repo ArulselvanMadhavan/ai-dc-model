@@ -85,6 +85,7 @@ class ModelSpecs:
     num_heads: int
     is_llama_mlp: bool
     name: str
+    num_iters: int
 
 @dataclass
 class ClusterSpecs:
