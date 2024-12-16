@@ -57,11 +57,11 @@ class Xpu:
         mem_wr = self.env.process(self.mem_access(wr_size, is_read, dtype, op))
         yield AllOf(self.env, [mem_rd, comp_proc, mem_wr])
 
-    def matmul_bk(self, b, m, n, p, dtype, op):
+    def matmul_bk(self, b, m, n, p, g, dtype, op):
         # Assume inputs to matmul were saved
         inp = b * m * n
         out = b * m * p
-        wt_grad = b * n * p      #
+        wt_grad = b * n * (p // g)      #
         wt_macs = b * n * m * p
         wt_rd_size = inp + out
         is_read = True

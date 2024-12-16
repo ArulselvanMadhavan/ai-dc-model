@@ -14,7 +14,7 @@ def loss_gradient(env, G, B, S, E, V, TP, dtype, tp_comm, dp_comm, xpu, dev_id):
     yield env.process(tp_comm.all_gather(B*S*V, dtype, [f"xpu{dev_id}-vocab_out-gather"]))
 
     yield env.process(dp_comm.all_reduce(G*S*V, dtype, [f"xpu_{dev_id}_loss_grad_partial"]))
-    yield env.process(xpu.matmul_bk(1, B*S, E, (V // TP), dtype, [f"X@vocab"]))
+    yield env.process(xpu.matmul_bk(1, B*S, E, (V // TP), 1, dtype, [f"X@vocab"]))
     yield env.process(tp_comm.all_gather(B*S*V, dtype, [f"xpu{dev_id}-bk_vocab_out-gather"]))
 
 def load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads, is_llama_ffn, freeze, is_train, dtype, xpu, op):
@@ -51,11 +51,14 @@ def fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, num_heads, kv_heads,
     for i in ["Q"]:
         yield env.process(xpu.matmul(1, B*S, E, E_tp, dtype, ckpt, op + [f"X@W_{i}"]))
     g = num_heads / kv_heads
+    h = kv_heads
     assert E_tp % g == 0
     for i in ["K", "V"]:
-        yield env.process(xpu.matmul(1, B*S, E, E_tp / g, dtype, ckpt, op + [f"X@W_{i}"]))
-    yield env.process(xpu.matmul(B, g*S, E_tp/g, S, dtype, ckpt, op + [f"Q@K^T"]))
-    yield env.process(xpu.matmul(B, g*S, S, E_tp/g, dtype, ckpt, op + [f"A@V^T"]))
+        yield env.process(xpu.matmul(1, B*S, E, E_tp // g, dtype, ckpt, op + [f"X@W_{i}"]))
+        # Repeat kv to grow E_tp // g to E_tp
+        # https://github.com/meta-llama/llama/blob/4d92db8a1db6c7f663252bf3477d2c4b8bad2385/llama/model.py#L171
+    yield env.process(xpu.matmul(B, S, E_tp, S, dtype, ckpt, op + [f"Q@K^T"]))
+    yield env.process(xpu.matmul(B, S, S, E_tp, dtype, ckpt, op + [f"A@V^T"]))
     yield env.process(xpu.matmul(1, B*S, E_tp, E, dtype, ckpt, op + [f"out_proj"]))
     yield env.process(tp_comm.all_reduce(B*S*E, dtype, op + [f"xpu{dev_id}-attn_partial"]))
     yield env.process(xpu.matmul(1, B*S, E, H_tp, dtype, ckpt, op + [f"ffn1"]))
@@ -80,10 +83,11 @@ def bk_pass(env, B, S, E, V, E_tp, H_tp, dtype, num_heads, kv_heads,
         yield env.process(xpu.matmul(1, B*S, E, H_tp, dtype, ckpt, [f"ffn1"]))
         yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-ffn_grad"]))
         yield env.process(xpu.matmul(1, B*S, E_tp, E, dtype, ckpt, [f"out_proj"]))
-        yield env.process(xpu.matmul(B, g*S, S, E_tp/g, dtype, ckpt, [f"A@V^T"]))
-        yield env.process(xpu.matmul(B, g*S, E_tp/g, S, dtype, ckpt, [f"Q@K^T"]))
+        yield env.process(xpu.matmul(B, S, S, E_tp, dtype, ckpt, [f"A@V^T"]))
+        yield env.process(xpu.matmul(B, S, E_tp, S, dtype, ckpt, [f"Q@K^T"]))
         for i in ["K", "V"]:
-            yield env.process(xpu.matmul(1, B*S, E, E_tp / g, dtype, ckpt, op + [f"X@W_{i}"]))
+            # Insert repeat kv to grow E_tp/g to E_tp
+            yield env.process(xpu.matmul(1, B*S, E, E_tp, dtype, ckpt, op + [f"X@W_{i}"]))
         for i in ["Q"]:
             yield env.process(xpu.matmul(1, B*S, E, E_tp, dtype, ckpt, [f"X@W_{i}"]))
         yield env.process(tp_comm.all_reduce(B*S*E, dtype, [f"xpu{dev_id}-attn_ip_grad"]))
@@ -91,19 +95,19 @@ def bk_pass(env, B, S, E, V, E_tp, H_tp, dtype, num_heads, kv_heads,
         yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype,
                                    num_heads, kv_heads, is_llama_mlp, freeze, dev_id,
                                    tp_comm, xpu, ckpt=True, op=op))
-        yield env.process(xpu.matmul_bk(1, B*S, H_tp, E, dtype, op+[f"ffn2"]))
+        yield env.process(xpu.matmul_bk(1, B*S, H_tp, E, 1, dtype, op+[f"ffn2"]))
         if is_llama_mlp:
-            yield env.process(xpu.matmul_bk(1, B*S, E, H_tp, dtype, op + [f"gate_ffn"]))
+            yield env.process(xpu.matmul_bk(1, B*S, E, H_tp, 1, dtype, op + [f"gate_ffn"]))
             yield env.process(xpu.elem_mul(B*S*H_tp, dtype, ckpt=False, op=op + [f"elem_mul"]))
-        yield env.process(xpu.matmul_bk(1, B*S, E, H_tp, dtype, op+[f"ffn1"]))
+        yield env.process(xpu.matmul_bk(1, B*S, E, H_tp, 1, dtype, op+[f"ffn1"]))
         yield env.process(tp_comm.all_reduce(B*S*E, dtype, op+[f"xpu{dev_id}-ffn_grad"]))
-        yield env.process(xpu.matmul_bk(1, B*S, E_tp, E, dtype, op+[f"out_proj"]))
-        yield env.process(xpu.matmul_bk(B, g*S, S, E_tp/g, dtype, op+[f"A@V^T"]))
-        yield env.process(xpu.matmul_bk(B, g*S, E_tp/g, S, dtype, op+[f"Q@K^T"]))
+        yield env.process(xpu.matmul_bk(1, B*S, E_tp, E, 1, dtype, op+[f"out_proj"]))
+        yield env.process(xpu.matmul_bk(B, S, S, E_tp, g, dtype, op+[f"A@V^T"]))
+        yield env.process(xpu.matmul_bk(B, S, E_tp, S, 1, dtype, op+[f"Q@K^T"]))
         for i in ["K", "V"]:
-            yield env.process(xpu.matmul_bk(1, B*S, E, E_tp / g, dtype, op + [f"X@W_{i}"]))
+            yield env.process(xpu.matmul_bk(1, B*S, E, E_tp // g, 1, dtype, op + [f"X@W_{i}"]))
         for i in ["Q"]:
-            yield env.process(xpu.matmul_bk(1, B*S, E, E_tp, dtype, op+[f"X@W_{i}"]))
+            yield env.process(xpu.matmul_bk(1, B*S, E, E_tp, 1, dtype, op+[f"X@W_{i}"]))
         yield env.process(tp_comm.all_reduce(B*S*E, dtype, op+[f"xpu{dev_id}-attn_ip_grad"]))
         yield env.process(xpu.mem_free(B*S*E_tp, dtype, op+[f"xpu_{dev_id}-act-ckpt"]))
 
@@ -185,10 +189,10 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
                                       tp_comm, xpu, op=[]))
 
         if is_text and (not freeze):
-            yield env.process(xpu.matmul_bk(1, B*S, V, E_tp, dtype, [f"X@emb"]))
+            yield env.process(xpu.matmul_bk(1, B*S, V, E_tp, 1, dtype, [f"X@emb"]))
             #yield env.process(tp_comm.all_gather(B*S*E, dtype, [f"xpu{dev_id}-bk-embed-gather"]))
         if is_vision and (not freeze):
-            yield env.process(xpu.matmul_bk(1, B*H_out*W_out, C*K*K, E_tp, dtype, ["image-embed-gen"]))
+            yield env.process(xpu.matmul_bk(1, B*H_out*W_out, C*K*K, E_tp, 1, dtype, ["image-embed-gen"]))
             #yield env.process(tp_comm.all_gather(B*H_out*W_out*E, dtype,[f"img-emb-gather"]))
         yield env.process(hps.write(param_count / (DP * TP), dtype, [f"xpu{dev_id}_wt_ckpt"]))
         yield env.process(hps.write(3 * param_count / (DP * TP), Dtypes.FP32, [f"xpu{dev_id}_opt_ckpt"]))
