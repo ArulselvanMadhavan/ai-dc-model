@@ -3,7 +3,7 @@ import simpy
 import numpy as np
 from utils import ComponentType, EventData, CounterData, get_cid
 
-def trace(env, callback):
+def collect(env, callback):
     """Replace the ``step()`` method of *env* with a tracing function
     that calls *callbacks* with an events time, priority, ID and its
     instance just before it is processed.
@@ -26,7 +26,7 @@ def trace(env, callback):
 def monitor(data, t, prio, eid, event):
     data.append((t, eid, event))
 
-def dump_perfetto(component_types, component_mat, data):
+def dump_perfetto(component_types, component_mat, data, file_name):
     from stubs.protos import trace_pb2
     import uuid
 
@@ -156,5 +156,5 @@ def dump_perfetto(component_types, component_mat, data):
     track_uuids = track_descriptors(component_types, component_mat, trace.packet)
     track_events(trace.packet, track_uuids, data)
 
-    with open("trace.perfetto", "wb+") as f:
+    with open(file_name, "wb+") as f:
         f.write(trace.SerializeToString())

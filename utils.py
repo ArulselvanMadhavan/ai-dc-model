@@ -17,6 +17,11 @@ def next_cid():
     CID = CID + 1
     return result
 
+def reset_cid():
+    global CID
+    CID = 0
+    return CID
+
 class ComponentType(Enum):
     XPU = 1
     CCL = 2
@@ -79,6 +84,7 @@ class ModelSpecs:
     kv_heads: int
     num_heads: int
     is_llama_mlp: bool
+    name: str
 
 @dataclass
 class ClusterSpecs:
@@ -87,3 +93,16 @@ class ClusterSpecs:
     scale_up: int
     scale_out: int
     HB: int
+
+@dataclass
+class XpuSpecs:
+    fp32_gflops: Tuple[int, float]
+    mem_bw_g: Tuple[int, float]
+    mem_cap_g: Tuple[int, float]
+    name: str
+
+@dataclass
+class TrainingSpecs:
+    cluster_specs: ClusterSpecs
+    xpu_specs: XpuSpecs
+    model_specs: ModelSpecs

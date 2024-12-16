@@ -3,14 +3,8 @@ from enum import Enum
 from simpy.events import AllOf
 from simpy.util import start_delayed
 from typing import Tuple, List
-from utils import GIGA, MICRO, MILLI, EventData, Dtypes, ComponentType, next_cid, CounterData
+from utils import *
 from dataclasses import dataclass
-
-@dataclass
-class XpuSpecs:
-    fp32_gflops: Tuple[int, float]
-    mem_bw_g: Tuple[int, float]
-    mem_cap_g: Tuple[int, float]
 
 class Xpu:
     def __init__(self, env, specs: XpuSpecs, dev_id: int):

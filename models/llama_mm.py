@@ -2,7 +2,6 @@ import simpy
 from components.xpu import Xpu, Dtypes, XpuSpecs
 from components.ccl import Ccl
 from components.hps import Hps
-from trace import trace, monitor
 from functools import partial
 from simpy.events import AllOf
 from utils import *

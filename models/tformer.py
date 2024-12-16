@@ -2,7 +2,6 @@ import simpy
 from components.xpu import Xpu, Dtypes, XpuSpecs
 from components.ccl import Ccl
 from components.hps import Hps
-from trace import trace, monitor
 from functools import partial
 from simpy.events import AllOf
 from utils import *
@@ -172,7 +171,8 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
 
         # Train
         for l in range(L):
-            print(f"Training layer-{l}")
+            # if dev_id == 0:
+            #     print(f"Training layer-{l}")
             yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype,
                                        num_heads, kv_heads, is_llama_mlp, freeze,
                                        dev_id, tp_comm, xpu, ckpt=False, op=[]))
@@ -182,7 +182,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         for l in range(L):
             yield env.process(bk_pass(env, B, S, E, V, E_tp, H_tp, dtype,
                                       num_heads, kv_heads, is_llama_mlp, freeze, dev_id,
-                                      tp_comm, xpu, ckpt, op))
+                                      tp_comm, xpu, op=[]))
 
         if is_text and (not freeze):
             yield env.process(xpu.matmul_bk(1, B*S, V, E_tp, dtype, [f"X@emb"]))
@@ -193,10 +193,10 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         yield env.process(hps.write(param_count / (DP * TP), dtype, [f"xpu{dev_id}_wt_ckpt"]))
         yield env.process(hps.write(3 * param_count / (DP * TP), Dtypes.FP32, [f"xpu{dev_id}_opt_ckpt"]))
 
-        if dev_id == 0:
-            print("Free mem:", xpu.mem_rem())
-            for k, v in xpu.mem_contents.items():
-                if v > 0:
-                    print(k, v)
+        # if dev_id == 0:
+        #     print("Free mem:", xpu.mem_rem())
+        #     for k, v in xpu.mem_contents.items():
+        #         if v > 0:
+        #             print(k, v)
 
-    yield AllOf(env, [start_delayed(env, tformer(i, L=L), i+1) for i in range(TP*DP)])
+    yield AllOf(env, [start_delayed(env, tformer(i, L=L), i+1) for i in range(1)])
