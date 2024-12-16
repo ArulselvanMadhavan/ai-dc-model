@@ -107,3 +107,10 @@ class TrainingSpecs:
     cluster_specs: ClusterSpecs
     xpu_specs: XpuSpecs
     model_specs: ModelSpecs
+
+@dataclass
+class MtrainingSpecs(TrainingSpecs):
+    # cluster_specs: ClusterSpecs
+    # xpu_specs: XpuSpecs
+    # base_model: ModelSpecs
+    sec_model: ModelSpecs

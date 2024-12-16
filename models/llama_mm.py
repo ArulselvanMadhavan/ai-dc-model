@@ -56,7 +56,6 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
         qkv_ffns = load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads,
                                  False, freeze, is_train, dtype, xpu, ["im"])
         out_proj = xpu.mem_fill(LF*E_tp*LF*E_tp, dtype, ["im-out-proj"])
-        print("IM:FZ:", freeze)
         yield [kload] + qkv_ffns + [out_proj]
         def img_fwd():
             yield env.process(img_emb_fwd(env, B, H_out, W_out, C, K, E, E_tp, dtype, False, dev_id, tp_comm, xpu))
@@ -70,8 +69,8 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
             yield env.process(tp_comm.all_reduce(B*S*LF*E, dtype, [f"xpu{dev_id}-im-partial"]))
         def img_bk():
             yield env.process(xpu.matmul_bk(1, B*S, LF*E_tp,
-                                         txt_model_specs.E // TP,
-                                         dtype, [f"im-multilayer-proj"]))
+                                            txt_model_specs.E // TP,
+                                            1, dtype, [f"im-multilayer-proj"]))
             for i in range(L):
                 yield env.process(bk_pass(env, B, S, E, V, E_tp, H_tp, dtype, num_heads, kv_heads,
                                           is_llama_mlp, freeze, dev_id, tp_comm, xpu, op=["im"]))
@@ -155,12 +154,12 @@ def llama_im_txt_train(env, xpu_specs, im_model_specs, txt_model_specs, cluster_
             yield env.process(next(im_model_gen))
         yield env.process(next(txt_model_gen))
 
-    print(xpu.mem_rem())
-    if dev_id == 0:
-        print("Free mem:", xpu.mem_rem())
-        for k, v in xpu.mem_contents.items():
-            if v > 0:
-                print(k, v)
+    # print(xpu.mem_rem())
+    # if dev_id == 0:
+    #     print("Free mem:", xpu.mem_rem())
+    #     for k, v in xpu.mem_contents.items():
+    #         if v > 0:
+    #             print(k, v)
     # yield AllOf(env, [env.process(ll) for ll in im_model_load])
     # print(xpu.mem_rem())
     # yield AllOf(env, all_loads)
