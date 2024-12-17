@@ -131,7 +131,7 @@ class Xpu:
             yield self.env.timeout(1, value=self.evt_data(op + ["mem_fill"]))
             yield self.env.timeout(1, value=CounterData(self.memory.level / self.memory.capacity, self.mem_cap_cid, self.dev_id))
         else:
-            print(self.mem_contents)
+            # print(self.mem_contents)
             raise Exception(Xpu.oom_msg(size_in_bytes, self.memory.capacity - self.memory.level))
 
     def mem_free(self, size, dtype, op):

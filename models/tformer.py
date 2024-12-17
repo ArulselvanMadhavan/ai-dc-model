@@ -52,7 +52,7 @@ def fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype, num_heads, kv_heads,
         yield env.process(xpu.matmul(1, B*S, E, E_tp, dtype, ckpt, op + [f"X@W_{i}"]))
     g = num_heads / kv_heads
     h = kv_heads
-    assert E_tp % g == 0
+    assert E_tp % g == 0, f"E_tp{E_tp} not divisible by g{g}"
     for i in ["K", "V"]:
         yield env.process(xpu.matmul(1, B*S, E, E_tp // g, dtype, ckpt, op + [f"X@W_{i}"]))
         # Repeat kv to grow E_tp // g to E_tp
@@ -116,10 +116,12 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     TP = cluster_specs.TP
     DP = cluster_specs.DP
     G = model_specs.G
+    assert TP > 0, f"TP({TP}) should be > 0"
+    assert DP > 0, f"DP({DP}) should be > 0"
     B = G // DP
     S = model_specs.S
     E = model_specs.E
-    assert E % TP == 0, "TP dim size should divide embedding dimension"
+    assert E % TP == 0, f"TP dim-{TP} size should divide embedding dimension-{E}"
     H = model_specs.H
     H_tp = H // TP
     E_tp = E // TP

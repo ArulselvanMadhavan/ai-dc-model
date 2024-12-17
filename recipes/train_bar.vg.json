@@ -1,0 +1,24 @@
+{
+    "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+    "description": "Stock prices of four large companies as a small multiples of area charts.",
+    "data": {"url": "data/ai_train.csv"},
+    "width": 400,
+    "mark": {
+        "type": "bar",
+        "tooltip": {"content": "data"},
+        "size": 15
+    },
+    "encoding": {
+        "x": {"field": "sku", "type": "nominal", "title":"(TP,DP)", "sort": {"field": "TP"}},
+        "y": {
+            "field": "training_time",
+            "type": "quantitative",
+            "title": "train days"
+        },
+        "color": {"field": "high_bw_domain", "type": "nominal"},
+        "xOffset":{"field":"high_bw_domain", "type": "nominal"},
+        "row":{
+            "field": "model_name"
+        }
+    }
+}
