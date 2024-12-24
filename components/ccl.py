@@ -1,5 +1,5 @@
 import simpy
-from utils import EventData, Dtypes, MICRO, ComponentType, next_cid, GIGA
+from utils import *
 from typing import Tuple
 import numpy as np
 from enum import Enum
@@ -19,9 +19,10 @@ class Ccl:
         self.bw_split = [bw * eff for bw, eff in zip(bw_split, bw_eff)]
         self.cid = next_cid()
         self.dev_split = dev_split
+        self.tid = next_ccl_id()
 
     def evt_data(self, name):
-        return EventData(name, self.env.now, ComponentType.CCL, self.cid, 1)
+        return EventData(name, self.env.now, ComponentType.CCL, self.cid, self.tid)
 
     @staticmethod
     def oot_msg():

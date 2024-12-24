@@ -22,6 +22,23 @@ def reset_cid():
     CID = 0
     return CID
 
+CCL_ID = 0
+def get_ccl_id():
+    global CCL_ID
+    return CCL_ID
+
+def next_ccl_id():
+    global CCL_ID
+    result = CCL_ID
+    CCL_ID = CCL_ID + 1
+    return result
+
+def reset_ccl_id():
+    global CCL_ID
+    CCL_ID = 0
+    return CCL_ID
+
+
 class ComponentType(Enum):
     XPU = 1
     CCL = 2
@@ -91,6 +108,7 @@ class ModelSpecs:
 class ClusterSpecs:
     TP: int
     DP: int
+    PP: int
     scale_up: int
     scale_out: int
     HB: int
@@ -114,3 +132,8 @@ class MtrainingSpecs(TrainingSpecs):
     # xpu_specs: XpuSpecs
     # base_model: ModelSpecs
     sec_model: ModelSpecs
+
+def layer_splits(PP, L):
+    assert L % PP == 0, f"{L} Layers not splitable into {PP} groups"
+    p = L // PP
+    return [p] * PP

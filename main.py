@@ -27,8 +27,8 @@ def get_divisors(n, start=1) :
 a100_specs = XpuSpecs((312000, 0.47), (1935, 0.7), (80, 0.85), "A100")
 h100_specs = XpuSpecs((989000, 0.43), (3350, 0.7), (80, 0.85), "H100")
 
-opt175b_cluster_specs = ClusterSpecs(TP=96, DP=11, scale_up=600*GIGA, scale_out=100*GIGA, HB=8)
-llama16k_cluster = ClusterSpecs(TP=8*16, DP=128, scale_up=900*GIGA,scale_out=100*GIGA, HB=8)
+opt175b_cluster_specs = ClusterSpecs(TP=96, DP=11, PP=12, scale_up=600*GIGA, scale_out=100*GIGA, HB=8)
+llama16k_cluster = ClusterSpecs(TP=8*16, DP=128, PP=1, scale_up=900*GIGA,scale_out=100*GIGA, HB=8)
 
 opt175b = ModelSpecs(1000, 2048, 12288, 4*12288, 50272, 96, True, False, None,
                      Dtypes.FP16, 1, 1, False, "opt175b", 140000)
@@ -86,6 +86,7 @@ if __name__ == "__main__":
             for HB in [HB_orig, cluster_specs.TP]:
                 TP = cluster_specs.TP
                 DP = cluster_specs.DP
+                PP = cluster_specs.PP
                 num_xpus = TP * DP
                 cluster_specs.HB = HB
                 #sku = f"{xpu_specs.name}_XPUs({num_xpus})_(TP,DP)({TP},{DP})_HB({HB})"
@@ -102,13 +103,13 @@ if __name__ == "__main__":
                     env.run()
                     del env
                     total_xpus = 1*1
-                    xpus = [f"xpu{i}" for i in range(total_xpus)]
+                    xpus = [f"pp-set-{i}-xpu" for i in range(total_xpus)]
                     trace_file_name = "_".join([model_specs.name,
                                                 xpu_specs.name,
                                                 f"{cluster_specs.TP}X{cluster_specs.DP}",
                                                 f"HB_{HB}"
                                                 ])
-                    dump_perfetto(["ccl", "hps", "xpu", "hbm"],
+                    dump_perfetto(["ccl", "hps", "pp-set", "hbm"],
                                   [[f"tp_comm{i}" for i in range(cluster_specs.DP)] + [f"dp_comm{i}" for i in range(1)],
                                    ["read", "write"],
                                    xpus,
@@ -136,15 +137,17 @@ if __name__ == "__main__":
                           (iter_time * model_specs.num_iters) / (MICRO * 60*60*24)]
                     rows.append(row)
                     reset_cid()
+                    reset_ccl_id()
                     print("Passing", TP, DP, TP * DP, HB)
                 except Exception as e:
                     reset_cid()
-                    print("Except:", TP, DP, TP * DP, HB, e)
-                    if "XPU - Requested" in str(e):
-                        continue
-                    else:
-                        print(rows)
-                        continue
+                    reset_ccl_id()
+                #     print("Except:", TP, DP, TP * DP, HB, e)
+                #     if "XPU - Requested" in str(e):
+                #         continue
+                #     else:
+                #         print(rows)
+                #         continue
                     raise e
 
     with open("results.csv", "w+") as f:

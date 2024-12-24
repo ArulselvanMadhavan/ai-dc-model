@@ -115,9 +115,10 @@ def bk_pass(env, B, S, E, V, E_tp, H_tp, dtype, num_heads, kv_heads,
 def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     TP = cluster_specs.TP
     DP = cluster_specs.DP
+    PP = cluster_specs.PP
     G = model_specs.G
-    assert TP > 0, f"TP({TP}) should be > 0"
-    assert DP > 0, f"DP({DP}) should be > 0"
+    for pp, p in [("TP", TP), ("DP", DP), ("PP", PP)]:
+        assert p > 0, f"{pp}({p}) should be > 0"
     B = G // DP
     S = model_specs.S
     E = model_specs.E
@@ -140,10 +141,17 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     out_params = 2 * E * V
     param_count = attn_params + 4*E + mlp_params + E + H if has_bias else attn_params + mlp_params
     total_params = (param_count * L) + out_params
+    print("PP layers:", layer_splits(PP, L))
     print("Total params:", total_params/GIGA)
     HB = cluster_specs.HB
+    # tp comms
     tp_comms = [Ccl(env, [HB, TP//HB], bws, bw_eff) for i in range(DP)]
     dp_comm = Ccl(env, [TP, DP], bws, bw_eff)
+    ll = L // PP
+    b = B // PP
+    print("p, b", p, b)
+    # Only ever has one destination and one sender
+    # pp_comms = [Ccl(env, [1, 1], bws, bw_eff) for i in range(p)]
     hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=500*GIGA)
     freeze = model_specs.freeze
     is_vision = model_specs.vision is not None

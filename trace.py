@@ -131,7 +131,9 @@ def dump_perfetto(component_types, component_mat, data, file_name):
         count = 0
         evts, cevts = get_timeout_evts(data)
         for (evt_type, timestamp, evt) in evts:
-            if evt.tid == 0 or evt.cty == ComponentType.CCL or evt.cty == ComponentType.HPS:
+            # xpu_id == 0 events are published.
+            if evt.cty == ComponentType.XPU or evt.cty == ComponentType.CCL or evt.cty == ComponentType.HPS:
+                print(evt)
                 thread_uuid = uuids[evt.cid]
                 evt_name = "_".join(evt.name)
                 tpkt, tevt = tpkt_tevt()
@@ -142,6 +144,7 @@ def dump_perfetto(component_types, component_mat, data, file_name):
                 tpkt.track_event.CopyFrom(tevt)
                 pkts.append(tpkt)
         for (now, evt) in cevts:
+            # Counter events
             if evt.tid == 0:
                 thread_uuid = uuids[evt.cid]
                 tpkt, tevt = tpkt_tevt()
