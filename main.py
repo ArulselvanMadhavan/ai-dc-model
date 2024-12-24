@@ -65,9 +65,9 @@ if __name__ == "__main__":
     rows.append(columns)
     tspecs = [
         opt175b_prod,
-        llama405b_prod,
-        llama70b_prod,
-        llama90b_prod
+        # llama405b_prod,
+        # llama70b_prod,
+        # llama90b_prod
     ]
     for tspec in tspecs:
         model_specs = tspec.model_specs
@@ -76,7 +76,8 @@ if __name__ == "__main__":
         TP_orig = cluster_specs.TP
         DP_orig = cluster_specs.DP
         HB_orig = cluster_specs.HB
-        divs = get_divisors(model_specs.E, start=8)
+        #divs = get_divisors(model_specs.E, start=8)
+        divs = [TP_orig]
         for tp in divs:
             cluster_specs.TP = tp
             cluster_specs.DP = (TP_orig * DP_orig) // tp
@@ -110,7 +111,9 @@ if __name__ == "__main__":
                                                 f"HB_{HB}"
                                                 ])
                     dump_perfetto(["ccl", "hps", "pp-set", "hbm"],
-                                  [[f"tp_comm{i}" for i in range(cluster_specs.DP)] + [f"dp_comm{i}" for i in range(1)],
+                                  [[f"tp_comm{i}" for i in range(cluster_specs.DP)] +
+                                   [f"dp_comm{i}" for i in range(1)] +
+                                   [f"pp_comm{i}" for i in range(cluster_specs.PP)],
                                    ["read", "write"],
                                    xpus,
                                    ["ctr_mem_capacity"]],

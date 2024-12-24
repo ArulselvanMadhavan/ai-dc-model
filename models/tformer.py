@@ -151,7 +151,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     b = B // PP
     print("p, b", p, b)
     # Only ever has one destination and one sender
-    # pp_comms = [Ccl(env, [1, 1], bws, bw_eff) for i in range(p)]
+    pp_comms = [Ccl(env, [1, 1], bws, bw_eff) for i in range(p)]
     hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=500*GIGA)
     freeze = model_specs.freeze
     is_vision = model_specs.vision is not None
