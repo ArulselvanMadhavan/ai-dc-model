@@ -117,9 +117,9 @@ if __name__ == "__main__":
                                                 f"HB_{HB}"
                                                 ])
                     dump_perfetto(["ccl", "hps", "xpuXhbm"],
-                                  [[f"tp_comm{i}" for i in range(cluster_specs.DP)] +
+                                  [[f"tp_comm{i}" for i in range(DP * PP)] +
                                    [f"dp_comm{i}" for i in range(1)] +
-                                   [f"pp_comm{i}" for i in range(cluster_specs.PP)],
+                                   [f"pp_comm{i}" for i in range(PP)],
                                    ["read", "write"],
                                    xpu_hbms],
                                   data,

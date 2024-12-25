@@ -8,6 +8,7 @@ from utils import *
 from simpy.events import AllOf
 from simpy.util import start_delayed
 from dataclasses import dataclass
+import numpy as np
 
 def loss_gradient(env, G, B, S, E, V, TP, dtype, tp_comm, dp_comm, xpu, dev_id):
     yield env.process(xpu.matmul(1, B*S, E, (V // TP), dtype, True, [f"X@vocab"]))
@@ -146,7 +147,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     print("Total params:", total_params/GIGA)
     HB = cluster_specs.HB
     # tp comms
-    tp_comms = [Ccl(env, [HB, TP//HB], bws, bw_eff) for i in range(DP)]
+    tp_comms = [Ccl(env, [HB, TP//HB], bws, bw_eff) for i in range(DP * PP)]
     dp_comm = Ccl(env, [TP, DP], bws, bw_eff)
     ll = L // PP
     b = B // PP
@@ -198,17 +199,19 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
                 print("Vocab load:", E, V, TP, E*(V // TP)*2/GIGA)
                 yield env.process(xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"]))
 
-    def load_act(xpu, B):
-        # fill space for activation tensor - Reusable
+    def load_act(pp_group_id, xpu, B):
         if is_text:
             yield env.process(xpu.mem_fill(B*S*E, dtype, ["X_txt"]))
         elif is_vision:
             yield env.process(xpu.mem_fill(B*H_out*W_out*C*K*K), ["X_img"])
 
+
     def tformer(pp_group_id, xpu, L=1, B=1):
         dev_id = 0
-        tp_comm = tp_comms[dev_id // TP]
+        tp_idx = 0 * DP + pp_group_id
+        tp_comm = tp_comms[tp_idx]
 
+        # fill space for activation tensor - Reusable
         if pp_group_id == 0:
             if is_text:
                 yield env.process(xpu.mem_fill(B*S, dtype, ["raw_tokens_txt"]))
@@ -218,7 +221,6 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
                 yield env.process(xpu.mem_fill(B*S*H*W, dtype, ["raw_tokens_img"]))
                 yield env.process(img_emb_fwd(env, B, H_out, W_out, C, K, E, E_tp,
                                           dtype, freeze, dev_id, tp_comm, xpu))
-
 
 
         #pp_comm = pp_comms[pp_group_id]
@@ -250,16 +252,33 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     # wait_until_done
     # reverse layers
     M = [B // PP] * PP
+    xpus = []
     for pp in range(PP):
         dev_id = 0
         xpu = Xpu(env, xpu_specs, dev_id) # Every xpu takes up two cids
         yield env.process(load_params(pp, xpu, L=ll, B=M[0]))
-        yield env.process(load_act(xpu, B=M[0]))
-        for m_id, m in enumerate(M):
-            yield env.process(tformer(pp, xpu, L=ll, B=m))
-            print("Free mem:", m_id, pp, xpu.mem_rem())
-        for k, v in xpu.mem_contents.items():
-            if pp == 0 and v > 0:
-                print(pp, k, v)
+        yield env.process(load_act(pp, xpu, B=M[0]))
+        xpus.append(xpu)
 
+    arr = np.empty([PP, len(M) + PP - 1], dtype=object)
+    for m_id, m in enumerate(M):
+        for pp in range(PP):
+            xpu = xpus[pp]
+            arr[pp][m_id] = tformer(pp, xpu, L=ll, B=m)
+            # print("Free mem:", m_id, pp, xpu.mem_rem())
+            # for k, v in xpu.mem_contents.items():
+            #     if pp == 0 and v > 0:
+            #         print(pp, k, v)
+    for pp in range(PP):
+        arr[pp] = np.roll(arr[pp], pp)
+    arr = np.transpose(arr, [1, 0])
+    print(arr.shape)
+    for m_id in range(arr.shape[0]):
+        row = arr[m_id]
+        procs = [env.process(e) for e in row.tolist() if e is not None]
+        print("Proc:", m_id, len(procs))
+        yield AllOf(env, procs)
+    #res = np.apply_along_axis(run, 1, arr)
+
+     #   arr[m_id]
     # yield AllOf(env, [start_delayed(env, tformer(i, L=ll), i+1) for i in range(1)])
