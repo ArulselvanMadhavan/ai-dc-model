@@ -151,21 +151,26 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     b = B // PP
     print("p, b", p, b)
     # Only ever has one destination and one sender
-    pp_comms = [Ccl(env, [1, 1], bws, bw_eff) for i in range(p)]
+    pp_comms = [Ccl(env, [1, 1], bws, bw_eff) for i in range(PP)]
     hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=500*GIGA)
+    print("Before tformer CID:", get_cid())
     freeze = model_specs.freeze
     is_vision = model_specs.vision is not None
     is_text = not is_vision
 
     if is_vision:
         vision_specs = model_specs.vision
-        H_out = calc_conv_out_dim(vision_specs.H, 0, 1, vision_specs.P, vision_specs.P)
-        W_out = calc_conv_out_dim(vision_specs.W, 0, 1, vision_specs.P, vision_specs.P)
+        H_out = calc_conv_out_dim(vision_specs.H, 0, 1, vision_specs.P,
+                                  vision_specs.P)
+        W_out = calc_conv_out_dim(vision_specs.W, 0, 1, vision_specs.P,
+                                  vision_specs.P)
         S = H_out * W_out
         C = vision_specs.C
         K = vision_specs.P
     def tformer(dev_id, L=1):
+        print("Inside tformer CID:", get_cid())
         tp_comm = tp_comms[dev_id // TP]
+        #pp_comm = pp_comms[pp_group_id]
         def add_opt_states(p, i, l):
             return [env.process(xpu.mem_fill(p, Dtypes.FP32, [f"{k}_{i}"]))
                     for k in ["momentum", "variance", "param"]]
@@ -213,10 +218,16 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         yield env.process(hps.write(param_count / (DP * TP), dtype, [f"xpu{dev_id}_wt_ckpt"]))
         yield env.process(hps.write(3 * param_count / (DP * TP), Dtypes.FP32, [f"xpu{dev_id}_opt_ckpt"]))
 
-        # if dev_id == 0:
-        #     print("Free mem:", xpu.mem_rem())
+        if dev_id == 0:
+            print("Free mem:", xpu.mem_rem())
         #     for k, v in xpu.mem_contents.items():
         #         if v > 0:
         #             print(k, v)
-
-    yield AllOf(env, [start_delayed(env, tformer(i, L=L), i+1) for i in range(1)])
+    # For every batch in m
+    # go through fwd pass
+    # initiate pp_comm
+    # wait_until_done
+    # reverse layers
+    for pp in range(PP):
+        yield env.process(tformer(pp, L=ll))
+    # yield AllOf(env, [start_delayed(env, tformer(i, L=ll), i+1) for i in range(1)])

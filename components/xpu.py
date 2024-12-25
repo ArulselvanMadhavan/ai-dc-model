@@ -8,7 +8,10 @@ from dataclasses import dataclass
 
 class Xpu:
     def __init__(self, env, specs: XpuSpecs, dev_id: int):
-        self.flops = [specs.fp32_gflops[0] * specs.fp32_gflops[1] * GIGA * dtype.value for dtype in Dtypes]
+        self.flops = [specs.fp32_gflops[0] *
+                      specs.fp32_gflops[1] *
+                      GIGA *
+                      dtype.value for dtype in Dtypes]
         self.mem_bw = specs.mem_bw_g[0] * specs.mem_bw_g[1] * GIGA
         self.mem_cap = specs.mem_cap_g[0] * specs.mem_cap_g[1] * GIGA
         self.memory = simpy.Container(env, init=0, capacity=self.mem_cap)
@@ -129,7 +132,9 @@ class Xpu:
         if (self.memory.level + size_in_bytes) < self.memory.capacity:
             yield self.memory.put(size_in_bytes)
             yield self.env.timeout(1, value=self.evt_data(op + ["mem_fill"]))
-            yield self.env.timeout(1, value=CounterData(self.memory.level / self.memory.capacity, self.mem_cap_cid, self.dev_id))
+            yield self.env.timeout(1, value=CounterData(self.memory.level / self.memory.capacity,
+                                                        self.mem_cap_cid,
+                                                        self.dev_id))
         else:
             # print(self.mem_contents)
             raise Exception(Xpu.oom_msg(size_in_bytes, self.memory.capacity - self.memory.level))

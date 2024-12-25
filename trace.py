@@ -44,36 +44,50 @@ def dump_perfetto(component_types, component_mat, data, file_name):
         thread_count = 0
         for c_id, ctype in enumerate(component_types):
             # Define proc
-            tpkt = trace_pb2.TracePacket()
-            tpkt.trusted_packet_sequence_id = 0
-            tdesc = trace_pb2.TrackDescriptor()
-            proc_uuid = random_int64()
-            tdesc.uuid = proc_uuid
-            pdesc = tdesc.process
-            pdesc.pid = c_id
-            pdesc.process_name = ctype
-            tpkt.track_descriptor.CopyFrom(tdesc)
-            pkts.append(tpkt)
-            # define threads
+            if "X" in ctype:
+                parts = ctype.split("X")
+            else:
+                parts = [ctype]
             comp_list = component_mat[c_id]
-            for _, component in enumerate(comp_list):
-                thread_uuid = random_int64()
-                uuids.append(thread_uuid)
+            thread_uuids = [random_int64() for c in comp_list]
+            for c_id, part in enumerate(parts):
                 tpkt = trace_pb2.TracePacket()
                 tpkt.trusted_packet_sequence_id = 0
                 tdesc = trace_pb2.TrackDescriptor()
-                tdesc.uuid = thread_uuid
-                tdesc.parent_uuid = proc_uuid
-                tdesc.name = component
-                if "ctr_" in component:
-                    tdesc.counter.CopyFrom(trace_pb2.CounterDescriptor())
-                else:
-                    tdesc.thread.pid = c_id
-                    tdesc.thread.tid = thread_count
-                    tdesc.thread.thread_name = component
+                proc_uuid = random_int64()
+                tdesc.uuid = proc_uuid
+                pdesc = tdesc.process
+                pdesc.pid = c_id
+                pdesc.process_name = part
                 tpkt.track_descriptor.CopyFrom(tdesc)
                 pkts.append(tpkt)
-                thread_count += 1
+            # xpuxhbm
+            # create 2 proc_uuids
+            # create 2 c_id
+            # single comp list - threads that belong to two different processes
+            # assign threads to alternate procs
+            # multiple threads
+                for cc in range(c_id, len(comp_list), len(parts)):
+                    component = comp_list[cc]
+                    thread_uuid = thread_uuids[cc]
+                    #uuids.append(thread_uuid)
+                    tpkt = trace_pb2.TracePacket()
+                    tpkt.trusted_packet_sequence_id = 0
+                    tdesc = trace_pb2.TrackDescriptor()
+                    tdesc.uuid = thread_uuid
+                    print("c_id|comp|", c_id, part, component, proc_uuid, thread_uuid)
+                    tdesc.parent_uuid = proc_uuid
+                    tdesc.name = component
+                    if "ctr_" in component:
+                        tdesc.counter.CopyFrom(trace_pb2.CounterDescriptor())
+                    else:
+                        tdesc.thread.pid = c_id
+                        tdesc.thread.tid = thread_count
+                        tdesc.thread.thread_name = component
+                    tpkt.track_descriptor.CopyFrom(tdesc)
+                    pkts.append(tpkt)
+                    thread_count += 1
+            uuids = uuids + thread_uuids
         return uuids
 
     def get_timeout_evts(data):
@@ -133,7 +147,7 @@ def dump_perfetto(component_types, component_mat, data, file_name):
         for (evt_type, timestamp, evt) in evts:
             # xpu_id == 0 events are published.
             if evt.cty == ComponentType.XPU or evt.cty == ComponentType.CCL or evt.cty == ComponentType.HPS:
-                print(evt)
+                #print(evt)
                 thread_uuid = uuids[evt.cid]
                 evt_name = "_".join(evt.name)
                 tpkt, tevt = tpkt_tevt()
@@ -144,16 +158,15 @@ def dump_perfetto(component_types, component_mat, data, file_name):
                 tpkt.track_event.CopyFrom(tevt)
                 pkts.append(tpkt)
         for (now, evt) in cevts:
-            # Counter events
-            if evt.tid == 0:
-                thread_uuid = uuids[evt.cid]
-                tpkt, tevt = tpkt_tevt()
-                tevt.track_uuid = thread_uuid
-                tevt.type = trace_pb2.TrackEvent.Type.TYPE_COUNTER
-                tevt.double_counter_value = evt.count
-                tpkt.timestamp = now
-                tpkt.track_event.CopyFrom(tevt)
-                pkts.append(tpkt)
+            thread_uuid = uuids[evt.cid]
+            print("hbm cids:", evt.cid, thread_uuid)
+            tpkt, tevt = tpkt_tevt()
+            tevt.track_uuid = thread_uuid
+            tevt.type = trace_pb2.TrackEvent.Type.TYPE_COUNTER
+            tevt.double_counter_value = evt.count
+            tpkt.timestamp = now
+            tpkt.track_event.CopyFrom(tevt)
+            pkts.append(tpkt)
 
     trace = trace_pb2.Trace()
     track_uuids = track_descriptors(component_types, component_mat, trace.packet)

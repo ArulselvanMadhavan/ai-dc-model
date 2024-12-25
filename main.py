@@ -103,20 +103,25 @@ if __name__ == "__main__":
                         env.process(vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs))
                     env.run()
                     del env
-                    total_xpus = 1*1
-                    xpus = [f"pp-set-{i}-xpu" for i in range(total_xpus)]
+                    total_xpus = 1*1*PP
+                    xpus = [f"xpu-group-{i}" for i in range(total_xpus)]
+                    hbms = [f"ctr_hbm-group-{i}" for i in range(total_xpus)]
+                    xpu_hbms = []
+                    for x, h in zip(xpus, hbms):
+                        xpu_hbms.append(x)
+                        xpu_hbms.append(h)
+
                     trace_file_name = "_".join([model_specs.name,
                                                 xpu_specs.name,
                                                 f"{cluster_specs.TP}X{cluster_specs.DP}",
                                                 f"HB_{HB}"
                                                 ])
-                    dump_perfetto(["ccl", "hps", "pp-set", "hbm"],
+                    dump_perfetto(["ccl", "hps", "xpuXhbm"],
                                   [[f"tp_comm{i}" for i in range(cluster_specs.DP)] +
                                    [f"dp_comm{i}" for i in range(1)] +
                                    [f"pp_comm{i}" for i in range(cluster_specs.PP)],
                                    ["read", "write"],
-                                   xpus,
-                                   ["ctr_mem_capacity"]],
+                                   xpu_hbms],
                                   data,
                                   trace_file_name)
 
