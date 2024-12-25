@@ -132,8 +132,3 @@ class MtrainingSpecs(TrainingSpecs):
     # xpu_specs: XpuSpecs
     # base_model: ModelSpecs
     sec_model: ModelSpecs
-
-def layer_splits(PP, L):
-    assert L % PP == 0, f"{L} Layers not splitable into {PP} groups"
-    p = L // PP
-    return [p] * PP
