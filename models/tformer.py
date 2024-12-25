@@ -17,7 +17,8 @@ def loss_gradient(env, G, B, S, E, V, TP, dtype, tp_comm, dp_comm, xpu, dev_id):
     yield env.process(xpu.matmul_bk(1, B*S, E, (V // TP), 1, dtype, [f"X@vocab"]))
     yield env.process(tp_comm.all_gather(B*S*V, dtype, [f"xpu{dev_id}-bk_vocab_out-gather"]))
 
-def load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads, is_llama_ffn, freeze, is_train, dtype, xpu, op):
+def load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads,
+                  is_llama_ffn, freeze, is_train, dtype, xpu, op):
     def add_opt_states(p, i, l):
         return [(xpu.mem_fill(p, Dtypes.FP32, op+[f"{k}_{i}"]))
                 for k in ["momentum", "variance", "param"]]
@@ -25,7 +26,8 @@ def load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads, is_llama_ffn, free
     ffns = []
     for l in range(L):
         qkvs = qkvs + [(xpu.mem_fill(E*E_tp, dtype, op+[f"W_{i}"])) for i in ["Q"]]
-        qkvs = qkvs + [(xpu.mem_fill(int(E*E_tp * kv_heads/num_heads), dtype, op+[f"W_{i}"])) for i in ["K", "V"]]
+        qkvs = qkvs + [(xpu.mem_fill(int(E*E_tp * kv_heads/num_heads),
+                                     dtype, op+[f"W_{i}"])) for i in ["K", "V"]]
         FFNs = ["ffn1", "ffn2", "ffn3"] if is_llama_ffn else ["ffn1", "ffn2"]
         ffns = ffns + [(xpu.mem_fill(E*H_tp, dtype, op+[f"W_{i}"])) for i in FFNs]
         if is_train and freeze is False:
@@ -167,8 +169,8 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         S = H_out * W_out
         C = vision_specs.C
         K = vision_specs.P
-    def tformer(dev_id, L=1):
-        print("Inside tformer CID:", get_cid())
+    def tformer(pp_group_id, L=1):
+        dev_id = 0
         tp_comm = tp_comms[dev_id // TP]
         #pp_comm = pp_comms[pp_group_id]
         def add_opt_states(p, i, l):
@@ -182,21 +184,25 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         if is_text:
             yield env.process(xpu.mem_fill((V//TP)*E, dtype, ["embed_load"]))
         elif is_vision:
-            yield env.process(xpu.mem_fill(E_tp * vision_specs.C * vision_specs.P * vision_specs.P, dtype, ["conv_kernel_load"]))
+            yield env.process(xpu.mem_fill(E_tp * vision_specs.C *
+                                           vision_specs.P * vision_specs.P,
+                                           dtype, ["conv_kernel_load"]))
 
         qkv_ffns = load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads,
                                  is_llama_mlp, freeze, is_train, dtype, xpu, [])
-        yield AllOf(env, [env.process(l) for l in qkv_ffns])
+        chunk_size = 3
+        for l in range(0, len(qkv_ffns), chunk_size):
+            qkv_procs = [env.process(l) for l in qkv_ffns[l:l+chunk_size]]
+            yield AllOf(env, qkv_procs)
+
         if is_text:
             yield env.process(xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"]))
-            yield env.process(embed_fwd(env, B, S, E, V, E_tp, dtype, freeze, dev_id, tp_comm, xpu))
+            yield env.process(embed_fwd(env, B, S, E, V, E_tp,
+                                        dtype, freeze, dev_id, tp_comm, xpu))
         elif is_vision:
-            yield env.process(img_emb_fwd(env, B, H_out, W_out, C, K, E, E_tp, dtype, freeze, dev_id, tp_comm, xpu))
-
-        # Train
+            yield env.process(img_emb_fwd(env, B, H_out, W_out, C, K, E, E_tp,
+                                          dtype, freeze, dev_id, tp_comm, xpu))
         for l in range(L):
-            # if dev_id == 0:
-            #     print(f"Training layer-{l}")
             yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype,
                                        num_heads, kv_heads, is_llama_mlp, freeze,
                                        dev_id, tp_comm, xpu, ckpt=False, op=[]))
@@ -229,5 +235,5 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     # wait_until_done
     # reverse layers
     for pp in range(PP):
-        yield env.process(tformer(pp, L=ll))
+        yield env.process(tformer(pp, L=1))
     # yield AllOf(env, [start_delayed(env, tformer(i, L=ll), i+1) for i in range(1)])

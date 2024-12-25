@@ -75,7 +75,7 @@ def dump_perfetto(component_types, component_mat, data, file_name):
                     tpkt.trusted_packet_sequence_id = 0
                     tdesc = trace_pb2.TrackDescriptor()
                     tdesc.uuid = thread_uuid
-                    print("c_id|comp|", c_id, part, component, proc_uuid, thread_uuid)
+                    # print("c_id|comp|", c_id, part, component, proc_uuid, thread_uuid)
                     tdesc.parent_uuid = proc_uuid
                     tdesc.name = component
                     if "ctr_" in component:
@@ -159,7 +159,7 @@ def dump_perfetto(component_types, component_mat, data, file_name):
                 pkts.append(tpkt)
         for (now, evt) in cevts:
             thread_uuid = uuids[evt.cid]
-            print("hbm cids:", evt.cid, thread_uuid)
+            # print("hbm cids:", evt.cid, thread_uuid)
             tpkt, tevt = tpkt_tevt()
             tevt.track_uuid = thread_uuid
             tevt.type = trace_pb2.TrackEvent.Type.TYPE_COUNTER
