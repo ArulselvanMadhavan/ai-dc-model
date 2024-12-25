@@ -64,7 +64,7 @@ class Xpu:
         emul = self.elem_mul(elems, dtype, False, op)
         yield self.env.process(self.mem_free(elems, dtype, op))
 
-    def matmul_bk(self, b, m, n, p, g, dtype, op):
+    def matmul_bk(self, b, m, n, p, g, dtype, op, free_act=True):
         # Assume inputs to matmul were saved
         inp = b * m * n
         out = b * m * p
@@ -112,10 +112,14 @@ class Xpu:
         is_read = False
         l_wr = self.env.process(self.mem_access(l_grad, is_read, dtype, l_grad_op))
         yield AllOf(self.env, [l_rd, l_comp, l_wr])
-        out_free = self.env.process(self.mem_free(out, dtype, op)) # Free output loss grad
+
         w_free = self.env.process(self.mem_free(wt_grad, dtype, wt_grad_op)) # Free w_grad
         act_free = self.env.process(self.mem_free(inp, dtype, l_grad_op)) # Free act grad
-        yield AllOf(self.env, [out_free, w_free, act_free])
+        if free_act:
+            out_free = self.env.process(self.mem_free(out, dtype, op)) # Free output loss grad
+            yield AllOf(self.env, [out_free, w_free, act_free])
+        else:
+            yield AllOf(self.env, [w_free, act_free])
 
 
     @staticmethod

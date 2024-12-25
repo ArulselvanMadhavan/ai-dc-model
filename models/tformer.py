@@ -39,7 +39,6 @@ def load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads,
     return qkvs + ffns
 
 def embed_fwd(env, B, S, E, V, E_tp, dtype, freeze, dev_id, tp_comm, xpu):
-    yield env.process(xpu.mem_fill(B*S*E, dtype, ["X"]))
     yield env.process(xpu.matmul(1, B*S, V, E_tp, dtype, not freeze, [f"X@emb"]))
     yield env.process(tp_comm.all_gather(B*S*E, dtype, [f"xpu{dev_id}-embed-gather"]))
 
@@ -155,7 +154,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     # Only ever has one destination and one sender
     pp_comms = [Ccl(env, [1, 1], bws, bw_eff) for i in range(PP)]
     hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=500*GIGA)
-    print("Before tformer CID:", get_cid())
+
     freeze = model_specs.freeze
     is_vision = model_specs.vision is not None
     is_text = not is_vision
@@ -181,13 +180,15 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         ffns = []
         xpu = Xpu(env, xpu_specs, dev_id) # Every xpu takes up two cids
         # Weight load
-        if is_text:
-            yield env.process(xpu.mem_fill((V//TP)*E, dtype, ["embed_load"]))
-        elif is_vision:
-            yield env.process(xpu.mem_fill(E_tp * vision_specs.C *
-                                           vision_specs.P * vision_specs.P,
-                                           dtype, ["conv_kernel_load"]))
+        if pp_group_id == 0:
+            if is_text:
+                yield env.process(xpu.mem_fill((V//TP)*E, dtype, ["embed_load"]))
+            elif is_vision:
+                yield env.process(xpu.mem_fill(E_tp * vision_specs.C *
+                                               vision_specs.P * vision_specs.P,
+                                               dtype, ["conv_kernel_load"]))
 
+        # weight load
         qkv_ffns = load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads,
                                  is_llama_mlp, freeze, is_train, dtype, xpu, [])
         chunk_size = 3
@@ -195,40 +196,53 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
             qkv_procs = [env.process(l) for l in qkv_ffns[l:l+chunk_size]]
             yield AllOf(env, qkv_procs)
 
+        if pp_group_id == PP - 1:
+            if is_text:
+                print("Vocab load:", E, V, TP, E*(V // TP)*2/GIGA)
+                yield env.process(xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"]))
+
+        # fill space for activation tensor - Reusable
         if is_text:
-            yield env.process(xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"]))
-            yield env.process(embed_fwd(env, B, S, E, V, E_tp,
-                                        dtype, freeze, dev_id, tp_comm, xpu))
+            yield env.process(xpu.mem_fill(B*S*E, dtype, ["X_txt"]))
         elif is_vision:
-            yield env.process(img_emb_fwd(env, B, H_out, W_out, C, K, E, E_tp,
+            yield env.process(xpu.mem_fill(B*H_out*W_out*C*K*K), ["X_img"])
+
+        if pp_group_id == 0:
+            if is_text:
+                yield env.process(xpu.mem_fill(B*S, dtype, ["raw_tokens_txt"]))
+                yield env.process(embed_fwd(env, B, S, E, V, E_tp,
+                                        dtype, freeze, dev_id, tp_comm, xpu))
+            elif is_vision:
+                yield env.process(xpu.mem_fill(B*S*H*W, dtype, ["raw_tokens_img"]))
+                yield env.process(img_emb_fwd(env, B, H_out, W_out, C, K, E, E_tp,
                                           dtype, freeze, dev_id, tp_comm, xpu))
         for l in range(L):
             yield env.process(fwd_pass(env, B, S, E, V, E_tp, H_tp, dtype,
                                        num_heads, kv_heads, is_llama_mlp, freeze,
                                        dev_id, tp_comm, xpu, ckpt=False, op=[]))
 
-# loss_gradient(env, G, B, S, E, V, TP, dtype, tp_comm, dp_comm, xpu, dev_id):
         yield env.process(loss_gradient(env, G, B, S, E, V, TP, dtype, tp_comm, dp_comm, xpu, dev_id))
         for l in range(L):
             yield env.process(bk_pass(env, B, S, E, V, E_tp, H_tp, dtype,
                                       num_heads, kv_heads, is_llama_mlp, freeze, dev_id,
                                       tp_comm, xpu, op=[]))
 
-        if is_text and (not freeze):
-            # all-scatter
-            yield env.process(tp_comm.all_gather(B*S*E, dtype, [f"xpu{dev_id}-bk-embed-gather"]))
-            yield env.process(xpu.matmul_bk(1, B*S, (V//TP), E, 1, dtype, [f"X@emb"]))
-        if is_vision and (not freeze):
-            yield env.process(tp_comm.all_gather(B*H_out*W_out*E, dtype,[f"img-emb-gather"]))
-            yield env.process(xpu.matmul_bk(1, B*H_out*W_out, C*K*K, E_tp, 1, dtype, ["image-embed-gen"]))
+        if pp_group_id == 0:
+            if is_text and (not freeze):
+                # all-scatter
+                yield env.process(tp_comm.all_gather(B*S*E, dtype, [f"xpu{dev_id}-bk-embed-gather"]))
+                yield env.process(xpu.matmul_bk(1, B*S, (V//TP), E, 1, dtype, [f"X@emb"], free_act=False))
+            if is_vision and (not freeze):
+                yield env.process(tp_comm.all_gather(B*H_out*W_out*E, dtype,[f"img-emb-gather"]))
+                yield env.process(xpu.matmul_bk(1, B*H_out*W_out, C*K*K, E_tp, 1, dtype, ["image-embed-gen"], free_act=False))
         yield env.process(hps.write(param_count / (DP * TP), dtype, [f"xpu{dev_id}_wt_ckpt"]))
         yield env.process(hps.write(3 * param_count / (DP * TP), Dtypes.FP32, [f"xpu{dev_id}_opt_ckpt"]))
 
         if dev_id == 0:
-            print("Free mem:", xpu.mem_rem())
-        #     for k, v in xpu.mem_contents.items():
-        #         if v > 0:
-        #             print(k, v)
+            print("Free mem:", pp_group_id, xpu.mem_rem())
+            for k, v in xpu.mem_contents.items():
+                if pp_group_id == PP - 1 and v > 0:
+                    print(pp_group_id, k, v)
     # For every batch in m
     # go through fwd pass
     # initiate pp_comm
