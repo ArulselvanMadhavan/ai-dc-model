@@ -150,8 +150,6 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     tp_comms = [Ccl(env, [HB, TP//HB], bws, bw_eff) for i in range(DP * PP)]
     dp_comm = Ccl(env, [TP, DP], bws, bw_eff)
     ll = L // PP
-    b = B // PP
-    print("p, b", p, b)
     # Only ever has one destination and one sender
     pp_comms = [Ccl(env, [1, 1], bws, bw_eff) for i in range(PP)]
     hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=500*GIGA)
@@ -206,11 +204,10 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
             yield env.process(xpu.mem_fill(B*H_out*W_out*C*K*K), ["X_img"])
 
 
-    def tformer(pp_group_id, xpu, L=1, B=1):
+    def tformer_fwd(pp_group_id, xpu, L=1, B=1):
         dev_id = 0
         tp_idx = 0 * DP + pp_group_id
         tp_comm = tp_comms[tp_idx]
-
         # fill space for activation tensor - Reusable
         if pp_group_id == 0:
             if is_text:
@@ -229,22 +226,27 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
                                        num_heads, kv_heads, is_llama_mlp, freeze,
                                        dev_id, tp_comm, xpu, ckpt=False, op=[]))
 
-        # yield env.process(loss_gradient(env, G, B, S, E, V, TP, dtype, tp_comm, dp_comm, xpu, dev_id))
-        # for l in range(L):
-        #     yield env.process(bk_pass(env, B, S, E, V, E_tp, H_tp, dtype,
-        #                               num_heads, kv_heads, is_llama_mlp, freeze, dev_id,
-        #                               tp_comm, xpu, op=[]))
+    def tformer_bk(pp_group_id, xpu, L=1, B=1):
+        dev_id = 0
+        tp_idx = 0 * DP + pp_group_id
+        tp_comm = tp_comms[tp_idx]
 
-        # if pp_group_id == 0:
-        #     if is_text and (not freeze):
-        #         # all-scatter
-        #         yield env.process(tp_comm.all_gather(B*S*E, dtype, [f"xpu{dev_id}-bk-embed-gather"]))
-        #         yield env.process(xpu.matmul_bk(1, B*S, (V//TP), E, 1, dtype, [f"X@emb"], free_act=False))
-        #     if is_vision and (not freeze):
-        #         yield env.process(tp_comm.all_gather(B*H_out*W_out*E, dtype,[f"img-emb-gather"]))
-        #         yield env.process(xpu.matmul_bk(1, B*H_out*W_out, C*K*K, E_tp, 1, dtype, ["image-embed-gen"], free_act=False))
+        for l in range(L):
+            yield env.process(bk_pass(env, B, S, E, V, E_tp, H_tp, dtype,
+                                      num_heads, kv_heads, is_llama_mlp, freeze, dev_id,
+                                      tp_comm, xpu, op=[]))
+
+        if pp_group_id == 0:
+            if is_text and (not freeze):
+                # all-scatter
+                yield env.process(tp_comm.all_gather(B*S*E, dtype, [f"xpu{dev_id}-bk-embed-gather"]))
+                yield env.process(xpu.matmul_bk(1, B*S, (V//TP), E, 1, dtype, [f"X@emb"], free_act=False))
+            if is_vision and (not freeze):
+                yield env.process(tp_comm.all_gather(B*H_out*W_out*E, dtype,[f"img-emb-gather"]))
+                yield env.process(xpu.matmul_bk(1, B*H_out*W_out, C*K*K, E_tp, 1, dtype, ["image-embed-gen"], free_act=False))
         # yield env.process(hps.write(param_count / (DP * TP), dtype, [f"xpu{dev_id}_wt_ckpt"]))
         # yield env.process(hps.write(3 * param_count / (DP * TP), Dtypes.FP32, [f"xpu{dev_id}_opt_ckpt"]))
+
 
     # For every batch in m
     # go through fwd pass
@@ -253,8 +255,8 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     # reverse layers
     M = [B // PP] * PP
     xpus = []
+    dev_id = 0
     for pp in range(PP):
-        dev_id = 0
         xpu = Xpu(env, xpu_specs, dev_id) # Every xpu takes up two cids
         yield env.process(load_params(pp, xpu, L=ll, B=M[0]))
         yield env.process(load_act(pp, xpu, B=M[0]))
@@ -264,7 +266,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     for m_id, m in enumerate(M):
         for pp in range(PP):
             xpu = xpus[pp]
-            arr[pp][m_id] = tformer(pp, xpu, L=ll, B=m)
+            arr[pp][m_id] = tformer_fwd(pp, xpu, L=ll, B=m)
             # print("Free mem:", m_id, pp, xpu.mem_rem())
             # for k, v in xpu.mem_contents.items():
             #     if pp == 0 and v > 0:
@@ -272,13 +274,30 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     for pp in range(PP):
         arr[pp] = np.roll(arr[pp], pp)
     arr = np.transpose(arr, [1, 0])
-    print(arr.shape)
     for m_id in range(arr.shape[0]):
         row = arr[m_id]
         procs = [env.process(e) for e in row.tolist() if e is not None]
-        print("Proc:", m_id, len(procs))
         yield AllOf(env, procs)
-    #res = np.apply_along_axis(run, 1, arr)
 
-     #   arr[m_id]
+    xpu = xpus[PP - 1]
+    tp_comm = tp_comms[0 * DP + PP - 1]
+    yield env.process(loss_gradient(env, G, B, S, E, V, TP, dtype, tp_comm, dp_comm, xpu, dev_id))
+
+    # Bkward pass
+    arr = np.empty([PP, len(M) + PP - 1], dtype=object)
+    for m_id, m in enumerate(M):
+        for pp in range(PP):
+            xpu = xpus[pp]
+            arr[pp][m_id] = tformer_bk(pp, xpu, L=ll, B=m)
+
+    for pp in range(PP):
+        arr[pp] = np.roll(arr[pp], PP-1-pp)
+
+    arr = np.transpose(arr, [1, 0])
+    for m_id in range(arr.shape[0]):
+        row = arr[m_id]
+        procs = [env.process(e) for e in row.tolist() if e is not None]
+        print(m_id, row, len(procs))
+        yield AllOf(env, procs)
+
     # yield AllOf(env, [start_delayed(env, tformer(i, L=ll), i+1) for i in range(1)])
