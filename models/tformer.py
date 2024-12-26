@@ -151,7 +151,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     dp_comm = Ccl(env, [TP, DP], bws, bw_eff)
     ll = L // PP
     # Only ever has one destination and one sender
-    pp_comms = [Ccl(env, [1, 1], bws, bw_eff) for i in range(PP)]
+    pp_comms = [Ccl(env, [1, 1], bws, bw_eff) for i in range(PP - 1)]
     hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=500*GIGA)
 
     freeze = model_specs.freeze
@@ -263,6 +263,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         xpus.append(xpu)
 
     arr = np.empty([PP, len(M) + PP - 1], dtype=object)
+    # pp_arr = np.empty([len(M), PP], dtype=object)
     for m_id, m in enumerate(M):
         for pp in range(PP):
             xpu = xpus[pp]
@@ -279,7 +280,11 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         for m_id in range(arr.shape[0]):
             row = arr[m_id]
             procs = [env.process(e) for e in row.tolist() if e is not None]
+            pp_procs = [env.process(pp_comms[e_idx].send(m * S  * E_tp, dtype, op=[]))
+                        for e_idx, e in enumerate(row.tolist())
+                        if e is not None and e_idx < PP - 1]
             yield AllOf(env, procs)
+            yield AllOf(env, pp_procs)
 
     yield env.process(schedule_procs(arr, lambda PP,pp: pp))
 

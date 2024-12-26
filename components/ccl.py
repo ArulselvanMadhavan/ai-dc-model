@@ -7,6 +7,7 @@ from enum import Enum
 class CollType(Enum):
     ALLREDUCE=1
     ALLGATHER=2
+    SEND=3
 
 class Ccl:
     def __init__(self, env, dev_split:Tuple[int, int],
@@ -27,6 +28,13 @@ class Ccl:
     @staticmethod
     def oot_msg():
         return f"Ccl - No tokens available. {self.tokens.level}/{self.tokens.capacity})"
+
+    def send_comm_time(self, size_in_bytes):
+        # Each PP group has TP=(n*HB) devices
+        # Each HB has low bw conn
+        # so, in theory , you can leverage n * low_bw conn to send BxSxE
+        comm_lbw = int((size_in_bytes / self.bw_split[1]) * MICRO)
+        return comm_lbw
 
     def all_reduce_comm_time(self, size_in_bytes):
         per_device_chunk = size_in_bytes / np.prod(self.dev_split)
@@ -76,6 +84,8 @@ class Ccl:
                     comm_time = self.all_reduce_comm_time(size_in_bytes)
                 case CollType.ALLGATHER:
                     comm_time = self.all_gather_comm_time(size_in_bytes)
+                case CollType.SEND:
+                    comm_time = self.send_comm_time(size_in_bytes)
             yield self.env.timeout(comm_time, value=self.evt_data(op + ["comm"]))
             yield self.tokens.get(1)
             yield self.env.timeout(1, value=self.evt_data(op + ["complete"]))
@@ -84,6 +94,7 @@ class Ccl:
                 #     print("Waiting?", self.tokens.level, self.tokens.capacity, op)
                 #     yield self.env.timeout(100, value=None)
         else:
+            print("PP:", op, self.tokens.level, self.tokens.capacity)
             raise Exception(Ccl.oot_msg)
 
     def all_reduce(self, payload, dtype, op):
@@ -91,3 +102,6 @@ class Ccl:
 
     def all_gather(self, payload, dtype, op):
         return self.run_collective(payload, dtype, op + ["all_gather"], CollType.ALLGATHER)
+
+    def send(self, payload, dtype, op):
+        return self.run_collective(payload, dtype, op + ["send"], CollType.SEND)

@@ -120,7 +120,7 @@ if __name__ == "__main__":
                     dump_perfetto(["ccl", "hps", "xpuXhbm"],
                                   [[f"tp_comm{i}" for i in range(DP * PP)] +
                                    [f"dp_comm{i}" for i in range(1)] +
-                                   [f"pp_comm{i}" for i in range(PP)],
+                                   [f"pp_comm{i}" for i in range(PP - 1)],
                                    ["read", "write"],
                                    xpu_hbms],
                                   data,
@@ -149,6 +149,7 @@ if __name__ == "__main__":
                     reset_ccl_id()
                     print("Passing", TP, DP, TP * DP, HB)
                 except Exception as e:
+                    print("Fail")
                     reset_cid()
                     reset_ccl_id()
                 #     print("Except:", TP, DP, TP * DP, HB, e)
