@@ -39,7 +39,10 @@ class Ccl:
     def all_reduce_comm_time(self, size_in_bytes):
         per_device_chunk = size_in_bytes / np.prod(self.dev_split)
         payload_hbw = per_device_chunk * self.dev_split[1]
-        comm_hbw = int((payload_hbw / self.bw_split[0]) * MICRO)
+        if self.bw_split[0] == 0:
+            comm_hbw = 0
+        else:
+            comm_hbw = int((payload_hbw / self.bw_split[0]) * MICRO)
         # Assume ring in scale-out
         payload_lbw = per_device_chunk
         num_steps = self.dev_split[1] - 1
@@ -60,10 +63,10 @@ class Ccl:
         # reduce-scatter - lbw
         # 1 2 3 4 - [1] [2] [3] [4]
         # 5 6 7 8 - [5] [6] [7] [8]
-        # all-gather - hbw
+        # all-gather - lbw
         # 1 2 3 4 - [1 5] [2 6] [3 7] [4 8]
         # 5 6 7 8 - [5 1] [6 2] [7 3] [8 4]
-        # all-gather - lbw
+        # all-gather - hbw
         # 1 2 3 4 - [1 5 2 6 3 7 4 8]
         # 5 6 7 8
         return 2 * comm_time

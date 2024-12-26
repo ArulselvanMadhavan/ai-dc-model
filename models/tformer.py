@@ -14,7 +14,7 @@ def loss_gradient(env, G, B, S, E, V, TP, dtype, tp_comm, dp_comm, xpu, dev_id):
     yield env.process(xpu.matmul(1, B*S, E, (V // TP), dtype, True, [f"X@vocab"]))
     yield env.process(tp_comm.all_gather(B*S*V, dtype, [f"xpu{dev_id}-vocab_out-gather"]))
 
-    yield env.process(dp_comm.all_reduce(G*S*V, dtype, [f"xpu_{dev_id}_loss_grad_partial"]))
+    yield env.process(dp_comm.all_reduce(B*S*V, dtype, [f"xpu_{dev_id}_loss_grad_partial"]))
     yield env.process(xpu.matmul_bk(1, B*S, E, (V // TP), 1, dtype, [f"X@vocab"]))
     yield env.process(tp_comm.all_gather(B*S*V, dtype, [f"xpu{dev_id}-bk_vocab_out-gather"]))
 
@@ -148,10 +148,12 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     HB = cluster_specs.HB
     # tp comms
     tp_comms = [Ccl(env, [HB, TP//HB], bws, bw_eff) for i in range(DP * PP)]
-    dp_comm = Ccl(env, [TP, DP], bws, bw_eff)
+    dp_comm_bws = [0, bws[1] * (TP // HB)]
+    dp_comm = Ccl(env, [1, DP], dp_comm_bws, bw_eff)
     ll = L // PP
     # Only ever has one destination and one sender
-    pp_comms = [Ccl(env, [1, 1], bws, bw_eff) for i in range(PP - 1)]
+    pp_comm_bws = [bws[0], bws[1] * (TP // HB)]
+    pp_comms = [Ccl(env, [1, 1], pp_comm_bws, bw_eff) for i in range(PP - 1)]
     hps = Hps(env, hps_rd_bw=1000*GIGA, hps_wr_bw=500*GIGA)
 
     freeze = model_specs.freeze
@@ -280,7 +282,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         for m_id in range(arr.shape[0]):
             row = arr[m_id]
             procs = [env.process(e) for e in row.tolist() if e is not None]
-            pp_procs = [env.process(pp_comms[e_idx].send(m * S  * E_tp, dtype, op=[]))
+            pp_procs = [env.process(pp_comms[e_idx].send(m * S * E, dtype, op=[]))
                         for e_idx, e in enumerate(row.tolist())
                         if e is not None and e_idx < PP - 1]
             yield AllOf(env, procs)

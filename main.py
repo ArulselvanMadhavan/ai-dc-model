@@ -27,8 +27,8 @@ def get_divisors(n, start=1) :
 a100_specs = XpuSpecs((312000, 0.47), (1935, 0.7), (80, 0.85), "A100")
 h100_specs = XpuSpecs((989000, 0.43), (3350, 0.7), (80, 0.85), "H100")
 
-opt175b_cluster_specs = ClusterSpecs(TP=8, DP=11, PP=12, scale_up=600*GIGA, scale_out=100*GIGA, HB=8)
-llama16k_cluster = ClusterSpecs(TP=8*16, DP=128, PP=1, scale_up=900*GIGA,scale_out=100*GIGA, HB=8)
+opt175b_cluster_specs = ClusterSpecs(TP=8, DP=11, PP=12, scale_up=600*GIGA, scale_out=50*GIGA, HB=8)
+llama16k_cluster = ClusterSpecs(TP=8*16, DP=128, PP=1, scale_up=900*GIGA,scale_out=50*GIGA, HB=8)
 
 opt175b = ModelSpecs(1000, 2048, 12288, 4*12288, 50272, 96, True, False, None,
                      Dtypes.FP16, 1, 1, False, "opt175b", 140000)
