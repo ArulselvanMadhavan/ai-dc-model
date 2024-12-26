@@ -60,7 +60,7 @@ llama90b_prod = MtrainingSpecs(
 
 if __name__ == "__main__":
     rows = []
-    columns = ["model_name", "sku", "XPU", "TP", "DP",
+    columns = ["model_name", "sku", "XPU", "TP", "DP", "PP",
                "HB", "high_bw_domain", "iter_time", "training_time"]
     rows.append(columns)
     tspecs = [
@@ -90,8 +90,9 @@ if __name__ == "__main__":
                 PP = cluster_specs.PP
                 num_xpus = TP * DP
                 cluster_specs.HB = HB
+                assert TP >= HB, "TP should not be less than HB size"
                 #sku = f"{xpu_specs.name}_XPUs({num_xpus})_(TP,DP)({TP},{DP})_HB({HB})"
-                sku = f"({TP},{DP})"
+                sku = f"({TP},{DP}, {PP})"
                 try:
                     env = simpy.Environment()
                     data = []
@@ -140,8 +141,8 @@ if __name__ == "__main__":
                         hbw = f"PSG"
                     else:
                         hbw = f"DGX"
-                    row = [model_specs.name, sku, xpu_specs.name, cluster_specs.TP,
-                           cluster_specs.DP, HB, hbw, iter_time,
+                    row = [model_specs.name, sku, xpu_specs.name, TP,
+                           DP, PP, HB, hbw, iter_time,
                           (iter_time * model_specs.num_iters) / (MICRO * 60*60*24)]
                     rows.append(row)
                     reset_cid()
