@@ -271,14 +271,17 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
             # for k, v in xpu.mem_contents.items():
             #     if pp == 0 and v > 0:
             #         print(pp, k, v)
-    for pp in range(PP):
-        arr[pp] = np.roll(arr[pp], pp)
-    arr = np.transpose(arr, [1, 0])
-    for m_id in range(arr.shape[0]):
-        row = arr[m_id]
-        procs = [env.process(e) for e in row.tolist() if e is not None]
-        yield AllOf(env, procs)
+    def schedule_procs(arr, roll_fn):
+        PP = arr.shape[0]
+        for pp in range(PP):
+            arr[pp] = np.roll(arr[pp], roll_fn(PP, pp))
+        arr = np.transpose(arr, [1, 0])
+        for m_id in range(arr.shape[0]):
+            row = arr[m_id]
+            procs = [env.process(e) for e in row.tolist() if e is not None]
+            yield AllOf(env, procs)
 
+    yield env.process(schedule_procs(arr, lambda PP,pp: pp))
     xpu = xpus[PP - 1]
     tp_comm = tp_comms[0 * DP + PP - 1]
     yield env.process(loss_gradient(env, G, B, S, E, V, TP, dtype, tp_comm, dp_comm, xpu, dev_id))
@@ -290,14 +293,14 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
             xpu = xpus[pp]
             arr[pp][m_id] = tformer_bk(pp, xpu, L=ll, B=m)
 
-    for pp in range(PP):
-        arr[pp] = np.roll(arr[pp], PP-1-pp)
+    yield env.process(schedule_procs(arr, lambda PP, pp: PP-1-pp))
+    # for pp in range(PP):
+    #     arr[pp] = np.roll(arr[pp], PP-1-pp)
 
-    arr = np.transpose(arr, [1, 0])
-    for m_id in range(arr.shape[0]):
-        row = arr[m_id]
-        procs = [env.process(e) for e in row.tolist() if e is not None]
-        print(m_id, row, len(procs))
-        yield AllOf(env, procs)
+    # arr = np.transpose(arr, [1, 0])
+    # for m_id in range(arr.shape[0]):
+    #     row = arr[m_id]
+    #     procs = [env.process(e) for e in row.tolist() if e is not None]
+    #     yield AllOf(env, procs)
 
     # yield AllOf(env, [start_delayed(env, tformer(i, L=ll), i+1) for i in range(1)])
