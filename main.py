@@ -27,13 +27,15 @@ def get_divisors(n, start=1) :
 a100_specs = XpuSpecs((312000, 0.47), (1935, 0.7), (80, 0.85), "A100")
 h100_specs = XpuSpecs((989000, 0.43), (3350, 0.7), (80, 0.85), "H100")
 
-opt175b_cluster_specs = ClusterSpecs(TP=8, DP=11, PP=12, scale_up=600*GIGA, scale_out=50*GIGA, HB=8)
-llama16k_cluster = ClusterSpecs(TP=8*16, DP=128, PP=1, scale_up=900*GIGA,scale_out=50*GIGA, HB=8)
+opt175b_cluster_specs = ClusterSpecs(TP=8, DP=11, PP=12, scale_up=600*GIGA, scale_out=100*GIGA, HB=8)
+llama16k_cluster = ClusterSpecs(TP=8, DP=128, PP=16, scale_up=900*GIGA,scale_out=100*GIGA, HB=8)
 
 opt175b = ModelSpecs(1000, 2048, 12288, 4*12288, 50272, 96, True, False, None,
                      Dtypes.FP16, 1, 1, False, "opt175b", 140000)
 
-llama_vit_h14 = ModelSpecs(16384, 1, 1280, 4*1280, 128256, 40, True, False, VisionSpecs(224, 224, 14, 3), Dtypes.FP16, 1, 1, False, "llama-vit-850M", 1)
+llama_vit_h14 = ModelSpecs(16384, 1, 1280, 4*1280, 128256, 40, True, False,
+                           VisionSpecs(224, 224, 14, 3), Dtypes.FP16, 1, 1,
+                           False, "llama-vit-850M", 1)
 llama70b_text = ModelSpecs(15*128, 8192, 8192, 3.5*8192, 128256, 80, True,
                            False, None, Dtypes.FP16, 8, 64, True, "llama70B", 975000)
 llama8b_text = ModelSpecs(15*128, 8192, 4096, 3.5*4096, 128256, 32, True, False, None, Dtypes.FP16, 8, 32, True, "llama8B", 975000)
@@ -41,7 +43,7 @@ llama70b_mm = ModelSpecs(16384, 8192, 8192, 3.5*8192, 128256, 80, True,
                          True, None, Dtypes.FP16, 8, 64, True, "llama70Bmm",
                          6*GIGA//16384)
 # section 3.4.1 - 16M tokens
-llama405b_text = ModelSpecs(15*128, 8192, 16384, 3.25*16384, 128256, 126, True,
+llama405b_text = ModelSpecs(16*128, 8192, 16384, 3.25*16384, 128256, 126, True,
                             False, None, Dtypes.FP16, 8, 128, True, "llama405B", 930000)
 opt175b_prod = TrainingSpecs(deepcopy(opt175b_cluster_specs), a100_specs, opt175b)
 llama405b_prod = TrainingSpecs(deepcopy(llama16k_cluster), h100_specs, llama405b_text)
@@ -64,8 +66,8 @@ if __name__ == "__main__":
                "HB", "high_bw_domain", "iter_time", "training_time"]
     rows.append(columns)
     tspecs = [
-        opt175b_prod,
-        # llama405b_prod,
+        # opt175b_prod,
+        llama405b_prod,
         # llama70b_prod,
         # llama90b_prod
     ]
