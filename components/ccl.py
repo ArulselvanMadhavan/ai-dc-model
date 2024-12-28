@@ -49,7 +49,6 @@ class Ccl:
         comm_lbw = int((payload_lbw / self.bw_split[1]) * MICRO)
         comm_lbw = comm_lbw * num_steps
         comm_time = comm_hbw + comm_lbw
-
         # print("BxSxE(in GB):", size_in_bytes/GIGA)
         # print("payload(hbw):", payload_hbw / GIGA)
         # print("comm_time(hbw):", comm_hbw/MICRO)

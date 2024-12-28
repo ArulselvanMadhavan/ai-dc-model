@@ -20,23 +20,31 @@ def loss_gradient(env, G, B, S, E, V, TP, dtype, tp_comm, dp_comm, xpu, dev_id):
 
 def load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads,
                   is_llama_ffn, freeze, is_train, dtype, xpu, op):
+    param_count = 0
     def add_opt_states(p, i, l):
         return [(xpu.mem_fill(p, Dtypes.FP32, op+[f"{k}_{i}"]))
                 for k in ["momentum", "variance", "param"]]
     qkvs = []
     ffns = []
+
     for l in range(L):
+        param_count += E*E_tp
         qkvs = qkvs + [(xpu.mem_fill(E*E_tp, dtype, op+[f"W_{i}"])) for i in ["Q"]]
         qkvs = qkvs + [(xpu.mem_fill(int(E*E_tp * kv_heads/num_heads),
                                      dtype, op+[f"W_{i}"])) for i in ["K", "V"]]
+        qkvs = qkvs + [xpu.mem_fill(E*E_tp, dtype, op+[f"W_out"])]
+        param_count += 2*E*E_tp*kv_heads/num_heads
+        param_count += E*E_tp
         FFNs = ["ffn1", "ffn2", "ffn3"] if is_llama_ffn else ["ffn1", "ffn2"]
         ffns = ffns + [(xpu.mem_fill(E*H_tp, dtype, op+[f"W_{i}"])) for i in FFNs]
+        param_count += 3*E*H_tp if is_llama_ffn else 2*E*H_tp
         if is_train and freeze is False:
             os = [p for i in ["Q"] for p in add_opt_states(E*E_tp, i, l)]
             qkvs = qkvs + os
             os = [p for i in ["K", "V"] for p in add_opt_states(int(E*E_tp*kv_heads/num_heads), i, l)]
             os = [p for i in FFNs for p in add_opt_states(E*H_tp, i, l)]
             ffns = ffns + os
+    print("PC:", param_count)
     return qkvs + ffns
 
 def embed_fwd(env, B, S, E, V, E_tp, dtype, freeze, dev_id, tp_comm, xpu):
@@ -144,7 +152,8 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     param_count = attn_params + 4*E + mlp_params + E + H if has_bias else attn_params + mlp_params
     total_params = (param_count * L) + out_params
 
-    print("Total params:", total_params/GIGA)
+    print("Total params:", TP, 3*E*E_tp, param_count / GIGA, total_params/GIGA)
+    print("Params per device:", total_params/(GIGA*TP*PP))
     HB = cluster_specs.HB
     # tp comms
     tp_comms = [Ccl(env, [HB, TP//HB], bws, bw_eff) for i in range(DP * PP)]
@@ -196,7 +205,6 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
 
         if pp_group_id == PP - 1:
             if is_text:
-                print("Vocab load:", E, V, TP, E*(V // TP)*2/GIGA)
                 yield env.process(xpu.mem_fill(E * (V // TP), dtype, ["vocab_load"]))
 
     def load_act(pp_group_id, xpu, B):
@@ -273,7 +281,7 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
             # print("Free mem:", m_id, pp, xpu.mem_rem())
             # for k, v in xpu.mem_contents.items():
             #     if pp == 0 and v > 0:
-            #         print(pp, k, v)
+            #         print(k, v)
     def schedule_procs(arr, roll_fn):
         PP = arr.shape[0]
         for pp in range(PP):
@@ -300,5 +308,6 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         for pp in range(PP):
             xpu = xpus[pp]
             arr[pp][m_id] = tformer_bk(pp, xpu, L=ll, B=m)
-
+    # print("FC: ", xpus[0].flop_count / GIGA)
+    # print("Params: ", xpus[0].param_count / GIGA)
     yield env.process(schedule_procs(arr, lambda PP, pp: PP-1-pp))

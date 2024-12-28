@@ -20,7 +20,6 @@ def get_divisors(n, start=1) :
     while i <= (n // (start*2)) :
         if (n % i==0) :
             result.append(i)
-            #print (i,end=" ")
         i = i + 1
     return result
 
@@ -36,9 +35,9 @@ opt175b = ModelSpecs(1000, 2048, 12288, 4*12288, 50272, 96, True, False, None,
 llama_vit_h14 = ModelSpecs(16384, 1, 1280, 4*1280, 128256, 40, True, False,
                            VisionSpecs(224, 224, 14, 3), Dtypes.FP16, 1, 1,
                            False, "llama-vit-850M", 1)
-llama70b_text = ModelSpecs(15*128, 8192, 8192, 3.5*8192, 128256, 80, True,
-                           False, None, Dtypes.FP16, 8, 64, True, "llama70B", 975000)
-llama8b_text = ModelSpecs(15*128, 8192, 4096, 3.5*4096, 128256, 32, True, False, None, Dtypes.FP16, 8, 32, True, "llama8B", 975000)
+llama70b_text = ModelSpecs(16*128, 8192, 8192, 3.5*8192, 128256, 80, True,
+                           False, None, Dtypes.FP16, 8, 64, True, "llama70B", 930000)
+llama8b_text = ModelSpecs(16*128, 8192, 4096, 3.5*4096, 128256, 32, True, False, None, Dtypes.FP16, 8, 32, True, "llama8B", 930000)
 llama70b_mm = ModelSpecs(16384, 8192, 8192, 3.5*8192, 128256, 80, True,
                          True, None, Dtypes.FP16, 8, 64, True, "llama70Bmm",
                          6*GIGA//16384)
@@ -48,6 +47,7 @@ llama405b_text = ModelSpecs(16*128, 8192, 16384, 3.25*16384, 128256, 126, True,
 opt175b_prod = TrainingSpecs(deepcopy(opt175b_cluster_specs), a100_specs, opt175b)
 llama405b_prod = TrainingSpecs(deepcopy(llama16k_cluster), h100_specs, llama405b_text)
 llama70b_prod = TrainingSpecs(deepcopy(llama16k_cluster), h100_specs, llama70b_text)
+llama8b_prod = TrainingSpecs(deepcopy(llama16k_cluster), h100_specs, llama8b_text)
 #llama8b_prod = TrainingSpecs(deepcopy(llama16k_cluster), h100_specs, )
 #Mtraining
 # llama image-text - global batch size 16384 - section 7.4 - 6B pairs
@@ -66,9 +66,10 @@ if __name__ == "__main__":
                "HB", "high_bw_domain", "iter_time", "training_time"]
     rows.append(columns)
     tspecs = [
-        # opt175b_prod,
-        llama405b_prod,
+        opt175b_prod,
+        # llama405b_prod,
         # llama70b_prod,
+        # llama8b_prod
         # llama90b_prod
     ]
     for tspec in tspecs:

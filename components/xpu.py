@@ -21,11 +21,14 @@ class Xpu:
         self.cid = next_cid()
         self.mem_cap_cid = next_cid()
         self.mem_contents = {}
+        self.flop_count = 0
+        # self.param_count = 0
 
     def evt_data(self, name):
         return EventData(name, self.env.now, ComponentType.XPU, self.cid, self.dev_id)
 
     def compute(self, flops, dtype, op):
+        self.flop_count += flops
         comp_time = int((flops / self.flops[dtype.value - 1]) * MICRO)
         yield self.env.timeout(comp_time, value=self.evt_data(op + ["compute"]))
 
@@ -129,6 +132,11 @@ class Xpu:
     def mem_fill(self, size, dtype, op):
         size_in_bytes = size * dtype.byte_size()
         op_name = "_".join(op)
+        # if "W_" in op_name:
+        #     print("Counting ops:", op_name)
+        #     self.param_count += size
+        if "embed_load" in op_name:
+            print("Embed params:", 2 * size / GIGA)
         if self.mem_contents.get(op_name, None) is None:
             self.mem_contents[op_name] = 1
         else:
