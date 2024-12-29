@@ -21,6 +21,7 @@ class Ccl:
         self.cid = next_cid()
         self.dev_split = dev_split
         self.tid = next_ccl_id()
+        self.comm_time = 0
 
     def evt_data(self, name):
         return EventData(name, self.env.now, ComponentType.CCL, self.cid, self.tid)
@@ -88,6 +89,7 @@ class Ccl:
                     comm_time = self.all_gather_comm_time(size_in_bytes)
                 case CollType.SEND:
                     comm_time = self.send_comm_time(size_in_bytes)
+            self.comm_time += comm_time
             yield self.env.timeout(comm_time, value=self.evt_data(op + ["comm"]))
             yield self.tokens.get(1)
             yield self.env.timeout(1, value=self.evt_data(op + ["complete"]))

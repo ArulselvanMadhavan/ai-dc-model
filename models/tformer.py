@@ -44,7 +44,7 @@ def load_qkv_ffns(env, L, E, E_tp, H_tp, num_heads, kv_heads,
             os = [p for i in ["K", "V"] for p in add_opt_states(int(E*E_tp*kv_heads/num_heads), i, l)]
             os = [p for i in FFNs for p in add_opt_states(E*H_tp, i, l)]
             ffns = ffns + os
-    print("PC:", param_count)
+    # print("Param Count per device:", param_count)
     return qkvs + ffns
 
 def embed_fwd(env, B, S, E, V, E_tp, dtype, freeze, dev_id, tp_comm, xpu):
@@ -146,14 +146,16 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
     num_heads = model_specs.num_heads
     kv_heads = model_specs.kv_heads
     is_llama_mlp = model_specs.is_llama_mlp
+    num_iters = model_specs.num_iters
     attn_params = 2*E*E + 2*E*E*(kv_heads/num_heads)
     mlp_params = 3 * E * H if is_llama_mlp else 2 * E * H
     out_params = 2 * E * V
     param_count = attn_params + 4*E + mlp_params + E + H if has_bias else attn_params + mlp_params
     total_params = (param_count * L) + out_params
-
+    param_count_per_dev = total_params/(TP * PP)
     print("Total params:", TP, 3*E*E_tp, param_count / GIGA, total_params/GIGA)
-    print("Params per device:", total_params/(GIGA*TP*PP))
+    print("Max Params per device:", total_params/(GIGA * TP * PP),
+          (param_count * L) / (GIGA * TP * PP))
     HB = cluster_specs.HB
     # tp comms
     tp_comms = [Ccl(env, [HB, TP//HB], bws, bw_eff) for i in range(DP * PP)]
@@ -308,6 +310,16 @@ def vanilla_tformer_procs(env, xpu_specs, model_specs, cluster_specs):
         for pp in range(PP):
             xpu = xpus[pp]
             arr[pp][m_id] = tformer_bk(pp, xpu, L=ll, B=m)
-    # print("FC: ", xpus[0].flop_count / GIGA)
+
     # print("Params: ", xpus[0].param_count / GIGA)
     yield env.process(schedule_procs(arr, lambda PP, pp: PP-1-pp))
+    flops = (xpus[0].flop_count)
+    flop_max = xpus[0].flops[dtype.value - 1]
+    print("flop_max:", flop_max)
+    print("Comp time:", xpus[0].compute_time)
+    print("TP Comm time:", tp_comms[0].comm_time)
+    print("DP Comm time:", dp_comm.comm_time)
+    if len(pp_comms) > 0:
+        print("PP Comm time:", pp_comms[0].comm_time)
+    print("train hours: ", num_iters, (flops * num_iters) / (60*60 * flop_max))
+    print("FLOP diff:", flops/GIGA, (8 * param_count_per_dev * B * S) / GIGA)

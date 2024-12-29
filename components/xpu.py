@@ -22,14 +22,16 @@ class Xpu:
         self.mem_cap_cid = next_cid()
         self.mem_contents = {}
         self.flop_count = 0
-        # self.param_count = 0
+        self.compute_time = 0
 
     def evt_data(self, name):
         return EventData(name, self.env.now, ComponentType.XPU, self.cid, self.dev_id)
 
     def compute(self, flops, dtype, op):
         self.flop_count += flops
+        # print("FL:", dtype, self.flops[dtype.value-1]/10**12)
         comp_time = int((flops / self.flops[dtype.value - 1]) * MICRO)
+        self.compute_time += comp_time
         yield self.env.timeout(comp_time, value=self.evt_data(op + ["compute"]))
 
     def mem_access(self, bts, is_read, dtype, op):
@@ -148,7 +150,6 @@ class Xpu:
                                                         self.mem_cap_cid,
                                                         self.dev_id))
         else:
-            # print(self.mem_contents)
             raise Exception(Xpu.oom_msg(size_in_bytes, self.memory.capacity - self.memory.level))
 
     def mem_free(self, size, dtype, op):
